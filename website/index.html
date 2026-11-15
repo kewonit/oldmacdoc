@@ -32,7 +32,7 @@
       </span></span></span>
     </a>
     <div class="topbar-actions">
-      <a class="btn btn-dark btn-sm" href="https://github.com/kewonit/oldmacdoc">GitHub</a>
+      <a class="btn btn-dark btn-sm" href="https://github.com/kewonit/oldmacdoc">GitHub<span class="stars" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.4l1.82 4.69 5.03.29-3.9 3.18 1.28 4.86L8 11.7l-4.23 2.72 1.28-4.86-3.9-3.18 5.03-.29z"/></svg><span class="stars-n"></span><span class="sr"> stars</span></span></a>
       <a class="btn btn-light btn-sm" href="https://github.com/kewonit/oldmacdoc/releases/latest/download/OldMacDoc.dmg">Download</a>
     </div>
   </div>
@@ -46,7 +46,7 @@
       <p class="lede">A retro 3D dock for macOS. Free and open source.</p>
       <div class="cta-row">
         <a class="btn btn-light" href="https://github.com/kewonit/oldmacdoc/releases/latest/download/OldMacDoc.dmg">Download</a>
-        <a class="btn btn-dark" href="https://github.com/kewonit/oldmacdoc">View on GitHub</a>
+        <a class="btn btn-dark" href="https://github.com/kewonit/oldmacdoc">View on GitHub<span class="stars" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.4l1.82 4.69 5.03.29-3.9 3.18 1.28 4.86L8 11.7l-4.23 2.72 1.28-4.86-3.9-3.18 5.03-.29z"/></svg><span class="stars-n"></span><span class="sr"> stars</span></span></a>
       </div>
     </div>
   </section>
@@ -106,7 +106,7 @@
       <p class="foot-sub">Free and open source, for macOS 14 Sonoma and later.</p>
       <div class="cta-row">
         <a class="btn btn-light" href="https://github.com/kewonit/oldmacdoc/releases/latest/download/OldMacDoc.dmg">Download</a>
-        <a class="btn btn-dark" href="https://github.com/kewonit/oldmacdoc">View on GitHub</a>
+        <a class="btn btn-dark" href="https://github.com/kewonit/oldmacdoc">View on GitHub<span class="stars" hidden><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.4l1.82 4.69 5.03.29-3.9 3.18 1.28 4.86L8 11.7l-4.23 2.72 1.28-4.86-3.9-3.18 5.03-.29z"/></svg><span class="stars-n"></span><span class="sr"> stars</span></span></a>
       </div>
     </div>
     <nav class="foot-cols" aria-label="Footer">
@@ -130,5 +130,32 @@
   </div>
 </footer>
 
+<script>
+// The GitHub buttons show the repo's star count once there is one. It's kept for an hour, so a visitor
+// asks GitHub at most once an hour, and nothing shows if GitHub can't be reached.
+(() => {
+  const badges = document.querySelectorAll(".stars");
+  const key = "oldmacdoc-stars";
+  const show = (n) => {
+    if (!Number.isInteger(n) || n < 1) return;
+    const text = n < 1000 ? String(n) : (n / 1000).toFixed(n < 10000 ? 1 : 0).replace(/\.0$/, "") + "k";
+    for (const badge of badges) {
+      badge.querySelector(".stars-n").textContent = text;
+      badge.hidden = false;
+    }
+  };
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(key)); } catch {}
+  if (saved) show(saved.n);
+  if (saved && Date.now() - saved.t < 3600e3) return;
+  fetch("https://api.github.com/repos/kewonit/oldmacdoc", { headers: { Accept: "application/vnd.github+json" } })
+    .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+    .then((repo) => {
+      show(repo.stargazers_count);
+      try { localStorage.setItem(key, JSON.stringify({ n: repo.stargazers_count, t: Date.now() })); } catch {}
+    })
+    .catch(() => {});
+})();
+</script>
 </body>
 </html>
