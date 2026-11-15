@@ -1,0 +1,76 @@
+name: OldMacDoc
+options:
+  bundleIdPrefix: com.kewonit
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  Sparkle:
+    url: https://github.com/sparkle-project/Sparkle
+    # Pinned so every release is built against the same Sparkle (the generated project isn't committed).
+    exactVersion: 2.10.1
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    DEVELOPMENT_TEAM: 55W3P96VL4
+    MARKETING_VERSION: 1.0.0
+    CURRENT_PROJECT_VERSION: 1
+targets:
+  OldMacDoc:
+    type: application
+    platform: macOS
+    sources:
+      - Sources/Core
+      - Sources/App
+      # The app icon, drawn from the dock's own art by `make icon`.
+      - Resources/Assets.xcassets
+      # License texts ship inside the app, as the MIT and Sparkle licenses require.
+      - path: LICENSE
+        buildPhase: resources
+      - path: THIRD_PARTY_NOTICES.md
+        buildPhase: resources
+    dependencies:
+      - package: Sparkle
+    info:
+      path: Resources/Info.plist
+      properties:
+        CFBundleDisplayName: OldMacDoc
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        LSUIElement: true
+        LSApplicationCategoryType: public.app-category.utilities
+        SUFeedURL: https://github.com/kewonit/oldmacdoc/releases/latest/download/appcast.xml
+        SUPublicEDKey: "nhNIkAdPXyCfuEpH3vG7Ji7+BVqN+BWPLX0WU0f+Uhg="
+        SUEnableAutomaticChecks: true
+        NSAppleEventsUsageDescription: "OldMacDoc asks Finder to empty the Trash when you choose Empty Trash."
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kewonit.oldmacdoc
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        CODE_SIGN_STYLE: Manual
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Resources/OldMacDoc.entitlements
+      configs:
+        Debug:
+          CODE_SIGN_IDENTITY: "-"
+          ENABLE_HARDENED_RUNTIME: NO
+        Release:
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
+    scheme:
+      testTargets:
+        - OldMacDocTests
+  OldMacDocTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Sources/Core
+      - Tests
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.kewonit.oldmacdoc.tests
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        GENERATE_INFOPLIST_FILE: YES

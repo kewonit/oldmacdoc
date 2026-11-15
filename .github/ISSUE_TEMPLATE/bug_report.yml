@@ -1,0 +1,59 @@
+name: Bug report
+description: Something isn't working as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. If Apple's Dock stayed hidden, choose **Quit and Restore Apple's Dock** from the menu bar icon, or see Troubleshooting in the README.
+        Security problems should be reported privately; see SECURITY.md.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Turn on auto-hide
+        2. Press F3 (Mission Control)
+        3. …
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: OldMacDoc version
+      description: From the menu bar icon or Settings, or the commit if you built it yourself.
+    validations:
+      required: true
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      placeholder: e.g. macOS 27.0.1
+    validations:
+      required: true
+  - type: dropdown
+    id: mac
+    attributes:
+      label: Mac
+      options:
+        - Apple silicon
+        - Intel
+    validations:
+      required: true
+  - type: textarea
+    id: setup
+    attributes:
+      label: Dock settings and displays
+      description: Shelf style, auto-hide on or off, magnification, number of displays and how they're arranged, Stage Manager on or off.
+  - type: textarea
+    id: media
+    attributes:
+      label: Screenshots, screen recordings or logs
+      description: A short screen recording helps a lot with visual or timing problems. Please avoid capturing anything private.

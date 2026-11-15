@@ -1,0 +1,218 @@
+/* OldMacDoc website. No dependencies, no JavaScript. */
+
+:root {
+  --bg: #000000;
+  --panel: #0e0e0e;
+  --ink: #f5f5f5;
+  --ink-soft: #c9c9c9;
+  --ink-mute: #8f8f8f;
+  --ink-faint: #808080;
+  --line: #242424;
+  --btn-dark: #262626;
+  --btn-dark-hover: #333333;
+  --accent: #3d86ff;
+  --radius: 16px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  overflow-wrap: break-word;
+}
+/* Faint dot texture at the page edges. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(#2b2b2b 1px, transparent 1.4px), radial-gradient(#2b2b2b 1px, transparent 1.4px);
+  background-size: 22px 22px;
+  background-position: 0 0, 11px 11px;
+  opacity: 0.5;
+  -webkit-mask-image: linear-gradient(90deg, #000 0, transparent 140px, transparent calc(100% - 140px), #000 100%);
+  mask-image: linear-gradient(90deg, #000 0, transparent 140px, transparent calc(100% - 140px), #000 100%);
+}
+
+.wrap { max-width: 72rem; margin: 0 auto; padding: 0 1rem; }
+.wrap-narrow { max-width: 42rem; margin: 0 auto; padding: 0 1rem; }
+.wrap-wide { max-width: 80rem; margin: 0 auto; padding: 0 0.75rem; }
+
+h1, h2, h3 { line-height: 1.12; margin: 0; text-wrap: pretty; }
+h1 { font-size: 1.875rem; font-weight: 500; letter-spacing: -0.5px; max-width: 32rem; }
+h2 { font-size: 1.5rem; font-weight: 500; }
+h3 { font-size: 1.25rem; font-weight: 500; }
+a { color: inherit; }
+img { max-width: 100%; height: auto; display: block; -webkit-user-drag: none; user-select: none; }
+figure { margin: 0; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+::selection { background: var(--accent); color: #0a0a0a; }
+
+/* ---------- Name in the top bar ----------
+   "oldmacdoc" turns into "old mac donald" on hover, and the song rolls in beside it. */
+.wordmark { display: inline-flex; align-items: center; gap: 0.7rem; min-width: 0; font-weight: 600; font-size: 1rem; letter-spacing: -0.2px; line-height: 1.5; text-decoration: none; }
+.wm-name { display: inline-flex; align-items: baseline; white-space: nowrap; }
+.wm-gap { display: inline-block; width: 0; transition: width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.wm-swap { display: inline-flex; overflow: hidden; height: 1.5em; }
+.wm-c { display: inline-block; max-width: 0.6em; transition: transform 0.3s ease, opacity 0.2s ease, max-width 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.wm-nald { display: inline-flex; max-width: 0; transition: max-width 0.45s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.wm-nald span { display: inline-block; opacity: 0; transform: translateY(100%); transition: transform 0.45s cubic-bezier(0.2, 0.8, 0.2, 1), opacity 0.3s ease; }
+.wm-nald span:nth-child(2) { transition-delay: 0.04s; }
+.wm-nald span:nth-child(3) { transition-delay: 0.08s; }
+.wm-nald span:nth-child(4) { transition-delay: 0.12s; }
+.wm-lyrics { display: none; }
+
+@media (hover: hover) and (min-width: 720px) {
+  .wm-lyrics {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    color: var(--ink-mute);
+    font-size: 0.85rem;
+    font-weight: 400;
+    letter-spacing: 0;
+    opacity: 0;
+    transform: translateY(0.45rem);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    pointer-events: none;
+  }
+  .wm-note { color: var(--ink-soft); }
+  .wm-window {
+    display: inline-block;
+    height: 1.5em;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent);
+    mask-image: linear-gradient(transparent, #000 30%, #000 70%, transparent);
+  }
+  .wm-roll { display: flex; flex-direction: column; }
+  .wm-roll span { height: 1.5em; line-height: 1.5em; white-space: nowrap; }
+
+  .wordmark:hover .wm-gap, .wordmark:focus-visible .wm-gap { width: 0.28em; }
+  .wordmark:hover .wm-c, .wordmark:focus-visible .wm-c { max-width: 0; opacity: 0; transform: translateY(-100%); }
+  .wordmark:hover .wm-nald, .wordmark:focus-visible .wm-nald { max-width: 2.6em; }
+  .wordmark:hover .wm-nald span, .wordmark:focus-visible .wm-nald span { opacity: 1; transform: none; }
+  .wordmark:hover .wm-lyrics, .wordmark:focus-visible .wm-lyrics { opacity: 1; transform: none; transition-delay: 0.35s; }
+  .wordmark:hover .wm-note, .wordmark:focus-visible .wm-note { animation: wm-note 1s ease-in-out 0.6s infinite alternate; }
+  .wordmark:hover .wm-roll, .wordmark:focus-visible .wm-roll { animation: wm-roll 5s ease-in-out 0.9s infinite; }
+}
+/* Each line holds for 0.8 s, then rolls up to the next in 0.2 s; the last line repeats the first, so the loop is seamless. */
+@keyframes wm-roll {
+  0%, 16% { transform: translateY(0); }
+  20%, 36% { transform: translateY(-1.5em); }
+  40%, 56% { transform: translateY(-3em); }
+  60%, 76% { transform: translateY(-4.5em); }
+  80%, 96% { transform: translateY(-6em); }
+  100% { transform: translateY(-7.5em); }
+}
+@keyframes wm-note { to { transform: translateY(-0.18em) rotate(-8deg); } }
+
+/* ---------- Buttons ---------- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 2.5rem;
+  padding: 0 1rem;
+  border-radius: 0.5rem;
+  font-weight: 500;
+  font-size: 0.875rem;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background 0.15s ease;
+}
+.btn-light { color: #0a0a0a; background: #f5f5f5; }
+.btn-light:hover { background: #ffffff; }
+.btn-dark { color: var(--ink); background: var(--btn-dark); }
+.btn-dark:hover { background: var(--btn-dark-hover); }
+.btn-sm { height: 2rem; padding: 0 0.75rem; }
+
+/* ---------- Top bar ---------- */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: rgba(0, 0, 0, 0.78);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+.topbar-inner { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding-top: 0.9rem; padding-bottom: 0.9rem; }
+.topbar-actions { display: flex; align-items: center; gap: 0.6rem; }
+
+/* ---------- Hero ---------- */
+.hero { padding: 4rem 0; }
+.hero h1 { margin-bottom: 1rem; }
+.lede { margin: 0; font-size: 1.5rem; font-weight: 500; letter-spacing: -0.2px; line-height: 1.35; color: var(--ink-mute); }
+.cta-row { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 2rem; }
+
+/* ---------- The desktop: a screenshot of the dock, edge to edge ---------- */
+.visual-bleed { border-bottom: 1px solid var(--line); }
+.visual-bleed figure { max-width: 1100px; margin: 0 auto; }
+/* The screenshots are the dock alone, on a transparent background: no frame around them. */
+.visual-bleed img { width: 100%; }
+
+/* ---------- Sections ---------- */
+.section { padding: 2rem 0; }
+.section-sub { margin: 0.5rem 0 0; font-size: 1.25rem; font-weight: 500; line-height: 1.4; color: var(--ink-mute); }
+
+/* Three shelves, stacked: each a wide strip of the dock. */
+.shelves { display: grid; gap: 1.75rem; margin-top: 2.75rem; }
+.shelves img { width: 100%; }
+/* Drawn at 2x: never larger than their real size. */
+.finish img { display: block; width: 100%; max-width: 432px; margin: 0 auto; }
+figcaption { margin-top: 0.6rem; font-size: 0.95rem; line-height: 1.35; }
+figcaption strong { font-weight: 600; color: var(--ink); }
+figcaption span { color: var(--ink-mute); }
+
+/* The icon finish: before and after, side by side. */
+.finish { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1.25rem; margin-top: 2.75rem; }
+
+/* ---------- Footer: a last call to action, then the map of the site ---------- */
+.footer { padding: 4rem 0 3rem; }
+.foot-cta { padding-bottom: 4rem; }
+.foot-sub { margin: 0.6rem 0 0; color: var(--ink-mute); font-size: 1.05rem; }
+.foot-cta .cta-row { margin-top: 1.75rem; }
+.foot-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; padding-top: 2.5rem; border-top: 1px solid var(--line); }
+.foot-cols h3 { margin: 0 0 0.85rem; font-size: 0.875rem; font-weight: 600; }
+.foot-cols a { display: block; width: fit-content; padding: 0.2rem 0; color: var(--ink-mute); text-decoration: none; font-size: 0.875rem; transition: color 0.15s ease; }
+.foot-cols a:hover { color: var(--ink); }
+.foot-base { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1.5rem; margin: 3rem 0 0; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 0.85rem; }
+.foot-base a { color: var(--ink-mute); text-decoration: none; }
+.foot-base a:hover { color: var(--ink); }
+.foot-legal { margin: 0.75rem 0 0; color: var(--ink-faint); font-size: 0.8rem; line-height: 1.5; }
+
+/* ---------- Responsive ---------- */
+@media (min-width: 640px) {
+  .cta-row { margin-top: 2.5rem; }
+  .section { padding: 3rem 0; }
+  .wrap-wide { padding: 0 1rem; }
+}
+@media (min-width: 1024px) {
+  .wrap-wide { padding: 0 1.5rem; }
+  /* The shelves and the finish comparison reach out past the text column on wide screens. */
+  .shelves, .finish {
+    width: min(64rem, 100vw - 3rem);
+    margin-inline: calc((100% - min(64rem, 100vw - 3rem)) / 2);
+  }
+}
+@media (min-width: 1280px) {
+  h1 { font-size: 2.25rem; letter-spacing: -0.7px; }
+  .lede { font-size: 1.875rem; letter-spacing: -0.4px; }
+}
+@media (max-width: 640px) {
+  .finish { grid-template-columns: minmax(0, 1fr); }
+  .foot-cols { grid-template-columns: 1fr 1fr; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { transition: none !important; }
+  .wm-roll, .wm-note { animation: none !important; }
+}

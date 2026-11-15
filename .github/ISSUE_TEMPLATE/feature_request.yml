@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest an improvement or something the original Dock did that's missing.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: Describe the problem or the use case rather than only the solution.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: How should it work?
+      description: If the original 10.5–10.9 Dock did this, describe how it behaved there.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+  - type: checkboxes
+    id: permissions
+    attributes:
+      label: Permissions
+      options:
+        - label: I understand OldMacDoc avoids features that need Accessibility, Screen Recording or Full Disk Access unless they're optional.
+          required: true

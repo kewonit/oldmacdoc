@@ -1,0 +1,69 @@
+# Design and behaviour
+
+What OldMacDoc does and why, in detail. The research behind these choices, with sources, is in [`research_notes/`](../research_notes) and [`reports/`](../reports).
+
+- **Shelf, built to match the original 3D Dock** (measured specs in `research_notes/Original glass dock fidelity/`):
+  - **Clear Glass** is the 10.5–10.7 shelf: a two-band grey floor, a dark seam, a bright 3 px front line, blue-white blob indicators on the floor, and the receding "zebra" separator before the Trash.
+  - **Frosted** is the 10.8 shelf: a smooth cool floor over a blur, a 1 px white line, a 3 px opaque lip with white-bar indicators, and a thin groove separator.
+  - **Smoke** is our own dark variant on the 10.8 shelf. The 10.9 bottom Dock wasn't dark.
+  - The floor is a trapezoid with a fixed front-corner overhang (`12 + ceil((h − 17) / 2)`), so its ends keep the same slant however wide the dock gets, and it widens with magnification.
+  - It's drawn once into a small image whose middle column stretches to the dock's width (`contentsCenter`), so a frame of magnification or sliding only moves layers and nothing is re-rasterized.
+- **Icons on the shelf:** icons stand on the floor and never cover the front line. Reflections are 1:1 mirror images clipped at the front line; Leopard's fade toward the front. The fade and the shelf's reflection opacity are baked into each reflection image, and the clip is a plain rectangle, so there are no masks. Each icon has a soft contact shadow. Tiles sit about 1 pt apart, as on the original.
+- **Apps arriving and leaving:** an app that opens grows into the dock from nothing, and one that quits shrinks away where it was (0.25 s), while its neighbours slide along, as on the original. One dragged off in a puff goes at once.
+- **Magnification:** the formula from Apple's Dock patent (US 7,434,177). Tile edges move by `S·sin(π/2·d/W)`, so the icon under the pointer reaches exactly the magnified size (up to 128 pt) and stays under the pointer, and the row grows evenly on both sides.
+- **Running apps and labels:**
+  - Running apps show indicators (Leopard blobs or Mountain Lion bars) that keep their size while icons magnify.
+  - The launch bounce is a parabolic hop of 0.6× the icon's height and finishes its current hop once the app has launched.
+  - Labels use Lucida Grande 14 on a 60% black pill. They appear instantly, switch instantly, and linger 250 ms after the pointer leaves.
+- **Clicking and editing:**
+  - Click to open an app or bring it forward. A running app is asked to come forward at once, with all its windows, and `NSWorkspace.openApplication` still sends the reopen that brings minimized windows back.
+  - Drag to reorder. Drag off the shelf to remove.
+  - Drop an app on the shelf to add it.
+  - Drop files on an app to open them with it. Option-drop an image to make it that app's icon.
+- **Clicks and menus:**
+  - Pressing darkens the icon in its own shape.
+  - Click-and-hold or right-click opens the menu above the icon, centred on it: Open, Hide/Show, Keep in Dock, Show in Finder, Icon (Retro Finish / Original / Choose Image… / Reset), and Quit. Hold Option for Force Quit.
+  - Cmd-click shows the app in Finder. Option-click switches to the app and hides the one you were in. Option-Cmd-click hides all the others.
+- **Removing apps:**
+  - A pinned app that isn't running goes up in a five-frame puff (our own cloud art) when dragged off.
+  - A running app slides back instead, and it leaves once it quits. Unchecking Keep in Dock behaves the same way.
+- **Trash:** at the end of the shelf. Click to open it; drop files on it to trash them. The full/empty state works without Full Disk Access. **Empty Trash…** confirms first, then asks Finder; macOS asks permission to control Finder the first time, and only then.
+- **Retro icon engine:**
+  - It picks the source in this order: your own image, then the app's legacy `.icns`, then the system icon.
+  - It lifts the gray plate off system icons only when it is confident, evens out sizes, then applies the Core Image finish (Off / Subtle / Full).
+  - Results are cached at 512 px in `~/Library/Caches/OldMacDoc`, and kept in memory for the session.
+  - Icons look the same on every shelf, so changing the shelf never re-renders them. A new finish swaps the whole row in one crossfade once it's ready.
+- **Auto-hide:** bottom edge of the main display. On the first launch it's on if Apple's Dock was hiding automatically, and off if it wasn't (Apple's default).
+  - It comes up at once when the pointer pushes on into the edge (a second mouse event with the pointer pinned there) or while dragging. A pointer that just stops on the edge has to rest there for 0.1 s, so clicks at the bottom of a window don't summon it. It never comes up in the bottom corners, which stay free for hot corners. It slides in over 0.15 s and leaves 0.2 s after the pointer does, sliding out over 0.18 s.
+  - The window never moves: the dock slides inside it on the display link, so it can reverse mid-slide, and no strip shows on a display stacked below.
+  - Space switches hold reveals for 0.4 s. Wake, display changes and a 1 s check make sure it can't stay stuck up.
+  - Reduce Motion fades it instead of sliding. It shows for a moment at launch so it can be found, and clicks pass through everywhere except the shelf.
+  - While the settings panel is open it stays up, so every change can be seen; it hides 0.5 s after the panel closes.
+- **Mission Control and App Exposé:** macOS always draws its own Dock there, even while parked; no setting changes that.
+  - While Apple's Dock waits on a free side edge (see below), it shows there only as a thin strip. Ours is the dock at the bottom: the panel is `.stationary`, so it stays on screen, and it comes up for as long as Mission Control is open, even in auto-hide mode, as the real Dock does.
+  - When neither side of the main display is free, ours steps aside instead, within about 20 ms of the trigger and ahead of the system's Dock, and comes back only after that Dock has gone.
+  - Detection uses WindowServer window events (private SkyLight calls loaded at runtime, no permission) plus one window-list read per frame at most.
+  - If those calls ever disappear, the window's `.transient` behaviour and a check before every reveal still keep the two docks apart.
+- **Settings panel:** the menu bar icon opens a panel like Control Center's that stays open while you try things; every setting applies as it's chosen.
+  - Shelf as three pictures drawn with the real shelf art (`ShelfPreview`), icon finish as a segmented control, Size and Magnification as sliders with readouts (the far left of Magnification is off; the Size slider ends at the largest size that fits the screen), and switches for Hide automatically, Lights for open apps and Open at login (which says when macOS needs approval, and shows errors in place rather than in an alert). About, Check for Updates and Quit are along the bottom.
+  - It's a non-activating panel: it takes the keyboard without making OldMacDoc the active app, so the app in front keeps its menus. Esc or ⌘W closes it, as does a click anywhere else (including on the dock), a Space or display change, or sleep. ⌘Q quits.
+  - On macOS 27 it opens through the status item's expanded-interface session, so it takes part in menu bar tracking like a menu; earlier, the icon toggles it. It sits under the icon, or at the top right of the screen when the menu bar is too full to show the icon. Liquid Glass on macOS 26 and later, the menu material before.
+  - While the Magnification slider is dragged, the dock magnifies at the middle of the shelf so the size can be seen.
+  - Opening the app again from Finder or Spotlight opens the panel. Only one copy runs at a time; a copy still quitting (during an update) doesn't count.
+- **About:** the icon, the version (selectable), links to the website, GitHub and the release notes, the bundled licences (Acknowledgements) and Check for Updates.
+- **App icon:** drawn by `make icon` from the dock's own shelf art (`scripts/icon/render.swift`): a close-up of the Clear Glass shelf, with its striped separator, on graphite. No Apple artwork.
+- **Apple's Dock:**
+  - Parked while the app runs, and restored on quit, on SIGTERM, and by a detached watchdog if the app crashes or is force-killed.
+  - The watchdog starts with default signal handling (the app itself ignores SIGTERM and handles it on a dispatch source), so quitting stops it. The backup records the process that owns it, and a watchdog only restores its own process's backup, so one left from an earlier run can't touch a copy opened straight after.
+  - Only one dock is ever on screen. Apple's is parked before ours appears, and ours is gone before Apple's comes back. There is no setting or mode that shows both.
+  - ⌥⌘D and System Settings' "Automatically hide and show the Dock" now toggle *this* dock's auto-hide. The Dock announces the change (`com.apple.dock.prefchanged`) and the app re-parks Apple's Dock straight away, before it can slide in. A 2-second check catches silent `defaults` writes.
+  - Quitting always restores the settings from before launch, whatever happened in between.
+  - Parked means: auto-hide on, a reveal delay of about 28 hours (so resting the pointer on the edge never brings it up), and `no-bouncing`. Without `no-bouncing`, an app asking for attention (a terminal when you switch away from it, for example) makes the hidden Dock push its bouncing icon up next to ours.
+  - When a side of the main display has no other display against it (the right is preferred, as Stage Manager uses the left), parked also means that edge, the smallest size and no magnification, so its Mission Control appearance is a strip on the side. The edge is chosen again when displays change.
+  - Your own values for every key come back on quit, and older backups are upgraded with the live values, which are still yours.
+- **Accessibility:** VoiceOver sees the dock as a list of buttons. Reduce Motion turns off the launch bounce and hover animations.
+- **Updates:** Sparkle 2.10.1 (pinned), from the appcast on GitHub Releases, checked once a day without asking first (`SUEnableAutomaticChecks`).
+  - OldMacDoc is never the active app, so an update found in the background would show behind other windows. With Sparkle's gentle reminders, its alert shows only when it can take focus (just after launch); otherwise the menu bar icon gets a dot and the panel offers the update.
+  - Installing quits OldMacDoc the normal way (Apple's Dock comes back for a moment), and the new version parks it again. Debug builds don't update themselves unless `OldMacDocDebugUpdates` is set.
+
+v1 asks for **no permissions** (no Accessibility, Screen Recording or Full Disk Access).

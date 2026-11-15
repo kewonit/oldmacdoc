@@ -1,0 +1,21 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Test
+        run: make test
+      - name: Universal release build (unsigned)
+        run: |
+          xcodebuild -project OldMacDoc.xcodeproj -scheme OldMacDoc -configuration Release \
+            -derivedDataPath build/DerivedData -clonedSourcePackagesDirPath build/spm \
+            ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO -quiet build
+          lipo -archs build/DerivedData/Build/Products/Release/OldMacDoc.app/Contents/MacOS/OldMacDoc
