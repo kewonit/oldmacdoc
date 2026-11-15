@@ -19,7 +19,7 @@ A release is a universal app signed with the Developer ID, notarized and stapled
 1. Write the release notes under `## <version>` in `CHANGELOG.md`. They become the update's notes and the GitHub release's.
 2. Run `PUBLISH=1 scripts/release.sh <version>`. It:
    - builds a universal archive, numbered from the version (1.2.3 is build 10203), so builds always go up;
-   - signs it with the Developer ID, notarizes and staples the app and the DMG. The DMG opens on the app and Applications standing on the glass shelf, laid out by `dmgbuild` (`scripts/dmg`, installed pinned under `build/` on first use);
+   - signs it with the Developer ID, notarizes and staples the app, then has `scripts/dmg/build.sh` make the DMG: the app and Applications standing on the glass shelf, laid out by `dmgbuild` (installed by hash from `scripts/dmg/requirements.txt` into `build/`, and set up again when that file changes). It checks the app inside the image before signing and notarizing it;
    - makes the Sparkle zip and an appcast holding only this version, with the notes embedded and no deltas;
    - uploads `OldMacDoc-<version>.dmg`, `OldMacDoc.dmg` (the website's download link), the zip and `appcast.xml` as a **draft** release `v<version>`.
 3. Check the draft, then publish it: `gh release edit v<version> --draft=false`. The appcast and the zip go live together.
@@ -49,3 +49,13 @@ defaults delete com.kewonit.oldmacdoc SULastCheckTime 2>/dev/null; open /Applica
 ```
 
 Install and relaunch, then check that About shows 0.9.1 (91) and that Apple's Dock is parked again (`defaults read com.apple.dock autohide-delay` is 100000). Afterwards remove the override: `defaults delete com.kewonit.oldmacdoc SUFeedURL`.
+
+## Rebuilding a release's DMG
+
+To change only the disk image of a published release (its window, say), rebuild it around the same notarized app; the update zip and appcast stay as they are:
+
+```sh
+scripts/dmg/build.sh build/release/<version>/export/OldMacDoc.app build/release/<version>/OldMacDoc-<version>.dmg
+cp build/release/<version>/OldMacDoc-<version>.dmg build/release/<version>/OldMacDoc.dmg
+gh release upload v<version> --clobber build/release/<version>/OldMacDoc-<version>.dmg build/release/<version>/OldMacDoc.dmg
+```

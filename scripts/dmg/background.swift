@@ -1,6 +1,6 @@
 // Renders the window of OldMacDoc's disk image (scripts/dmg/background.png and background@2x.png):
 // the app and the Applications folder standing on the Clear Glass shelf, the striped separator
-// between them as in the real Dock, a dotted arrow from one to the other, and a line of the song.
+// between them as in the real Dock, an arrow from one to the other, and a line of the song.
 // Finder draws the two icons and their names on top; this draws everything else. No Apple artwork.
 //
 // Run with `make dmg-background`, which compiles this file together with the shelf drawing code:
@@ -50,8 +50,9 @@ func text(_ ctx: CGContext, _ string: String, top: CGFloat, font: NSFont, color:
 
 /// The arrow from the app to Applications, as one drawn shape: a stroke that swells from a fine point
 /// along a cubic curve (`start`, `c1`, `c2`, `tip`) into a swept-back head, fading in toward the
-/// tip, on a soft shadow so it sits in the scene rather than on it.
-func arrow(_ ctx: CGContext, start: CGPoint, c1: CGPoint, c2: CGPoint, tip: CGPoint) {
+/// tip, on a soft shadow so it sits in the scene rather than on it. `scale` is the drawing's pixels
+/// per point: CoreGraphics measures shadows in pixels, whatever the transform.
+func arrow(_ ctx: CGContext, start: CGPoint, c1: CGPoint, c2: CGPoint, tip: CGPoint, scale: CGFloat) {
     func point(_ t: CGFloat) -> CGPoint {
         let u = 1 - t
         let a = u * u * u, b = 3 * u * u * t, c = 3 * u * t * t, d = t * t * t
@@ -90,16 +91,17 @@ func arrow(_ ctx: CGContext, start: CGPoint, c1: CGPoint, c2: CGPoint, tip: CGPo
                               y: base.y - across.y * headHalfWidth - along.y * sweep))
     for p in right.reversed() { shape.addLine(to: p) } // (addLines would start a new outline)
     shape.closeSubpath()
-    // A round end at the fine start.
-    shape.addEllipse(in: CGRect(x: start.x - 0.6, y: start.y - 0.6, width: 1.2, height: 1.2))
+    // A round end at the fine start. A union, not a second shape in the same path: that one winds
+    // the other way, and the overlap would cancel out.
+    let outline = shape.union(CGPath(ellipseIn: CGRect(x: start.x - 0.6, y: start.y - 0.6, width: 1.2, height: 1.2), transform: nil))
 
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -1.5), blur: 5, color: CGColor(gray: 0, alpha: 0.45))
+    ctx.setShadow(offset: CGSize(width: 0, height: -1.5 * scale), blur: 5 * scale, color: CGColor(gray: 0, alpha: 0.45))
     ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-    ctx.addPath(shape)
+    ctx.addPath(outline)
     ctx.clip()
     ctx.drawLinearGradient(gradient([CGColor(gray: 1, alpha: 0.28), CGColor(gray: 1, alpha: 0.92)], [0, 0.75]),
-                           start: start, end: tip, options: [.drawsAfterEndLocation])
+                           start: start, end: tip, options: [.drawsBeforeStartLocation, .drawsAfterEndLocation])
     ctx.endTransparencyLayer()
     ctx.restoreGState()
 }
@@ -145,7 +147,7 @@ func render(scale: CGFloat) -> CGImage {
     arrow(ctx, start: CGPoint(x: Layout.appX + 70, y: y(Layout.iconY - 40)),
           c1: CGPoint(x: Layout.appX + 100, y: y(Layout.iconY - 96)),
           c2: CGPoint(x: Layout.applicationsX - 104, y: y(Layout.iconY - 104)),
-          tip: CGPoint(x: Layout.applicationsX - 72, y: y(Layout.iconY - 46)))
+          tip: CGPoint(x: Layout.applicationsX - 72, y: y(Layout.iconY - 46)), scale: scale)
 
     text(ctx, "Drag OldMacDoc to Applications", top: 46,
          font: .systemFont(ofSize: 22, weight: .semibold), color: NSColor(white: 1, alpha: 0.94), kern: -0.3)

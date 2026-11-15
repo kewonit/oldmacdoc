@@ -2,7 +2,7 @@ APP = OldMacDoc
 DERIVED = build/DerivedData
 SPM = build/spm
 
-.PHONY: project build run test release clean icon dmg-background
+.PHONY: project build run test release clean icon dmg-background art-check
 
 project:
 	xcodegen generate --quiet
@@ -41,3 +41,8 @@ dmg-background:
 	mkdir -p build
 	swiftc -O -o build/render-dmg-background $(DMG_SOURCES)
 	build/render-dmg-background scripts/dmg
+
+# Checks both drawings still compile against the shelf art (CI runs this; the images are committed).
+art-check:
+	swiftc -typecheck $(ICON_SOURCES)
+	swiftc -typecheck $(DMG_SOURCES)

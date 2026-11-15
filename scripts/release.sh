@@ -35,10 +35,7 @@ xcrun notarytool history --keychain-profile "$PROFILE" >/dev/null 2>&1 \
   || { echo "No notarytool profile '$PROFILE'. Create it first (docs/RELEASING.md)."; exit 1; }
 xcodegen generate --quiet
 [ -x "$BIN/generate_keys" ] || xcodebuild -resolvePackageDependencies -project $APP.xcodeproj -clonedSourcePackagesDirPath $SPM -quiet
-# The DMG's window (scripts/dmg) is laid out by dmgbuild, which writes it straight into the image
-# without scripting Finder. It lives in its own Python environment under build/, pinned.
-DMGBUILD=build/dmgbuild-venv/bin/dmgbuild
-[ -x "$DMGBUILD" ] || { python3 -m venv build/dmgbuild-venv && build/dmgbuild-venv/bin/pip install -q "dmgbuild==1.6.5"; }
+scripts/dmg/build.sh --prepare # dmgbuild, for the DMG at the end
 KEY=$(sed -nE 's/^ *SUPublicEDKey: "(.*)"$/\1/p' project.yml)
 [ -n "$KEY" ] && [ "$("$BIN/generate_keys" --account com.kewonit.oldmacdoc -p)" = "$KEY" ] \
   || { echo "The update signing key in your keychain doesn't match SUPublicEDKey in project.yml."; exit 1; }
@@ -62,11 +59,7 @@ xcrun stapler staple "$APP_PATH"
 rm "$OUT/notarize.zip"
 
 echo "Building and notarizing the DMG…"
-"$DMGBUILD" -s scripts/dmg/settings.py -D app="$APP_PATH" "$APP" "$OUT/$APP-$VERSION.dmg" >/dev/null
-codesign --sign "Developer ID Application" --timestamp "$OUT/$APP-$VERSION.dmg"
-xcrun notarytool submit "$OUT/$APP-$VERSION.dmg" --keychain-profile "$PROFILE" --wait
-xcrun stapler staple "$OUT/$APP-$VERSION.dmg"
-spctl -a -vvv -t install "$OUT/$APP-$VERSION.dmg"
+scripts/dmg/build.sh "$APP_PATH" "$OUT/$APP-$VERSION.dmg" "$PROFILE"
 # The same DMG under a name that never changes, for …/releases/latest/download/OldMacDoc.dmg.
 cp "$OUT/$APP-$VERSION.dmg" "$OUT/$APP.dmg"
 
