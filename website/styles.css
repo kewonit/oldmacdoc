@@ -2,7 +2,6 @@
 
 :root {
   --bg: #000000;
-  --panel: #0e0e0e;
   --ink: #f5f5f5;
   --ink-soft: #c9c9c9;
   --ink-mute: #8f8f8f;
@@ -11,7 +10,6 @@
   --btn-dark: #262626;
   --btn-dark-hover: #333333;
   --accent: #3d86ff;
-  --radius: 16px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
 }
 
@@ -188,11 +186,11 @@ figcaption span { color: var(--ink-mute); }
 .foot-cta { padding-bottom: 4rem; }
 .foot-sub { margin: 0.6rem 0 0; color: var(--ink-mute); font-size: 1.05rem; }
 .foot-cta .cta-row { margin-top: 1.75rem; }
-.foot-cols { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2rem; padding-top: 2.5rem; border-top: 1px solid var(--line); }
+.foot-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2rem; padding-top: 2.5rem; border-top: 1px solid var(--line); }
 .foot-cols h3 { margin: 0 0 0.85rem; font-size: 0.875rem; font-weight: 600; }
 .foot-cols a { display: block; width: fit-content; padding: 0.2rem 0; color: var(--ink-mute); text-decoration: none; font-size: 0.875rem; transition: color 0.15s ease; }
 .foot-cols a:hover { color: var(--ink); }
-.foot-base { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.5rem 1.5rem; margin: 3rem 0 0; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 0.85rem; }
+.foot-base { margin: 3rem 0 0; padding-top: 1.5rem; border-top: 1px solid var(--line); color: var(--ink-faint); font-size: 0.85rem; }
 .foot-base a { color: var(--ink-mute); text-decoration: none; }
 .foot-base a:hover { color: var(--ink); }
 .foot-legal { margin: 0.75rem 0 0; color: var(--ink-faint); font-size: 0.8rem; line-height: 1.5; }
@@ -217,7 +215,6 @@ figcaption span { color: var(--ink-mute); }
 }
 @media (max-width: 640px) {
   .finish { grid-template-columns: minmax(0, 1fr); }
-  .foot-cols { grid-template-columns: 1fr 1fr; }
 }
 @media (max-width: 420px) {
   /* No room for it next to the name on small phones; the hero's GitHub button still has it. */
