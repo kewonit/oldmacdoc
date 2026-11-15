@@ -19,7 +19,7 @@ A release is a universal app signed with the Developer ID, notarized and stapled
 1. Write the release notes under `## <version>` in `CHANGELOG.md`. They become the update's notes and the GitHub release's.
 2. Run `PUBLISH=1 scripts/release.sh <version>`. It:
    - builds a universal archive, numbered from the version (1.2.3 is build 10203), so builds always go up;
-   - signs it with the Developer ID, notarizes and staples the app and the DMG;
+   - signs it with the Developer ID, notarizes and staples the app and the DMG. The DMG opens on the app and Applications standing on the glass shelf, laid out by `dmgbuild` (`scripts/dmg`, installed pinned under `build/` on first use);
    - makes the Sparkle zip and an appcast holding only this version, with the notes embedded and no deltas;
    - uploads `OldMacDoc-<version>.dmg`, `OldMacDoc.dmg` (the website's download link), the zip and `appcast.xml` as a **draft** release `v<version>`.
 3. Check the draft, then publish it: `gh release edit v<version> --draft=false`. The appcast and the zip go live together.

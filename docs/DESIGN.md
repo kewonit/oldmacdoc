@@ -52,6 +52,7 @@ What OldMacDoc does and why, in detail. The research behind these choices, with 
   - Opening the app again from Finder or Spotlight opens the panel. Only one copy runs at a time; a copy still quitting (during an update) doesn't count.
 - **About:** the icon, the version (selectable), links to the website, GitHub and the release notes, the bundled licences (Acknowledgements) and Check for Updates.
 - **App icon:** drawn by `make icon` from the dock's own shelf art (`scripts/icon/render.swift`): a close-up of the Clear Glass shelf, with its striped separator, on graphite. No Apple artwork.
+- **Disk image:** the window shows the app and Applications on the Clear Glass shelf, the striped separator between them as in the Dock, an arrow from one to the other and a line of the song. `make dmg-background` draws it (`scripts/dmg/background.swift`) from the same shelf art; `scripts/dmg/settings.py` places the icons to match.
 - **Apple's Dock:**
   - Parked while the app runs, and restored on quit, on SIGTERM, and by a detached watchdog if the app crashes or is force-killed.
   - The watchdog starts with default signal handling (the app itself ignores SIGTERM and handles it on a dispatch source), so quitting stops it. The backup records the process that owns it, and a watchdog only restores its own process's backup, so one left from an earlier run can't touch a copy opened straight after.

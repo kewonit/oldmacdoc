@@ -27,6 +27,7 @@ make project   # generates OldMacDoc.xcodeproj from project.yml
 make test      # unit tests
 make run       # builds and runs the app (Debug, signed ad hoc)
 make icon      # redraws the app icon from the shelf art (only after changing that art)
+make dmg-background  # redraws the disk image window the same way
 ```
 
 The Xcode project is generated and isn't checked in. Edit `project.yml` for target, build-setting and resource changes, then run `make project` again.

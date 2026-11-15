@@ -2,7 +2,7 @@ APP = OldMacDoc
 DERIVED = build/DerivedData
 SPM = build/spm
 
-.PHONY: project build run test release clean icon
+.PHONY: project build run test release clean icon dmg-background
 
 project:
 	xcodegen generate --quiet
@@ -34,3 +34,10 @@ icon:
 	mkdir -p build
 	swiftc -O -o build/render-icon $(ICON_SOURCES)
 	build/render-icon Resources/Assets.xcassets
+
+# Redraws the disk image window's background the same way (committed too; see scripts/dmg).
+DMG_SOURCES = scripts/dmg/background.swift $(filter-out scripts/icon/render.swift,$(ICON_SOURCES))
+dmg-background:
+	mkdir -p build
+	swiftc -O -o build/render-dmg-background $(DMG_SOURCES)
+	build/render-dmg-background scripts/dmg
