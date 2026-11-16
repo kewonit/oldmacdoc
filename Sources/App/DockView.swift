@@ -1649,6 +1649,12 @@ final class DockView: NSView, NSDraggingSource {
         menuClosed()
     }
 
+    /// The pointer moved (screen coordinates): an open menu or stack follows it.
+    func popoverPointerMoved(_ p: NSPoint) {
+        if dockMenu.isOpen { dockMenu.hover(at: p) }
+        if stacks.isOpen { stacks.pointerMoved(to: p) }
+    }
+
     /// Closes the menu, if one is open. The window controller calls this when the dock steps aside or hides.
     func closeMenu() {
         if dockMenu.isOpen { dockMenu.close() }

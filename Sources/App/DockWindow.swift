@@ -122,7 +122,12 @@ final class DockWindowController {
 
         // Mouse-moved monitors need no permission (only key monitoring does). The global one is how
         // we notice the pointer while the panel lets clicks through.
-        let handler: (NSEvent) -> Void = { [weak self] _ in self?.handleMouse(fromEvent: true) }
+        let handler: (NSEvent) -> Void = { [weak self] _ in
+            // OldMacDoc is never the active app, so its menus and stacks don't get mouse-moved events of their own:
+            // the pointer reaches them from these monitors, as it reaches the dock.
+            self?.view.popoverPointerMoved(NSEvent.mouseLocation)
+            self?.handleMouse(fromEvent: true)
+        }
         if let m = NSEvent.addGlobalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged, .rightMouseDragged], handler: handler) {
             monitors.append(m)
         }

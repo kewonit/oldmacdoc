@@ -85,6 +85,17 @@ final class StackController {
 
     func close() { close(notify: true) }
 
+    /// The pointer moved (screen coordinates): the item under it lights up.
+    func pointerMoved(to p: NSPoint) {
+        guard isOpen, let panel, let view = panel.contentView else { return }
+        let local = panel.convertPoint(fromScreen: p)
+        if let fan = view as? FanView {
+            fan.hover(fan.convert(local, from: nil))
+        } else if let grid = view.subviews.compactMap({ $0 as? GridContent }).first?.grid {
+            grid.hover(grid.convert(local, from: nil))
+        }
+    }
+
     private func close(notify: Bool) {
         guard isOpen else { return }
         if dragging {
@@ -328,8 +339,10 @@ private final class FanView: NSView {
                                        owner: self, userInfo: nil))
     }
 
-    override func mouseMoved(with event: NSEvent) { highlighted = slot(at: convert(event.locationInWindow, from: nil)) }
+    override func mouseMoved(with event: NSEvent) { hover(convert(event.locationInWindow, from: nil)) }
     override func mouseExited(with event: NSEvent) { highlighted = nil }
+
+    func hover(_ p: NSPoint) { highlighted = slot(at: p) }
 
     override func hitTest(_ point: NSPoint) -> NSView? {
         // Clicks between the items fall through to whatever is behind (and close the fan).
@@ -583,8 +596,11 @@ private final class GridView: NSView {
         addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil))
     }
 
-    override func mouseMoved(with event: NSEvent) {
-        if let i = index(at: convert(event.locationInWindow, from: nil)) { highlighted = i }
+    override func mouseMoved(with event: NSEvent) { hover(convert(event.locationInWindow, from: nil)) }
+
+    func hover(_ p: NSPoint) {
+        guard visibleRect.contains(p), let i = index(at: p) else { return }
+        highlighted = i
     }
 
     override func mouseDown(with event: NSEvent) {

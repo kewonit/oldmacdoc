@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.1
+
+- **Menus and stacks follow the pointer at once.** In 1.2.0 the highlight in the right-click menu, and in Fan and Grid stacks, could lag seconds behind the pointer. It now moves with it.
+
 ## 1.2.0
 
 - **The original Dock's menus, pointer and all.** Right-click, Control-click or click and hold an icon: its menu hangs above it with the pointer aimed at it, light on Clear Glass and charcoal on Frosted and Smoke, as in Leopard and Snow Leopard. It lists the app's windows, the app's own items (Safari's New Window, Music's controls), Options with Keep in Dock, Open at Login, Show in Finder and Assign To, then Show All Windows, Hide and Quit; hold Option for Hide Others and Force Quit. Finder, the Trash and the separator have theirs too. Press, drag and release, arrow keys and typing all work.
