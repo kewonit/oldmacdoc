@@ -116,6 +116,8 @@ enum BadgeArt {
             NSGraphicsContext.restoreGraphicsState()
         }
         let image = ctx.makeImage()
+        // Counts come and go: keep only the recent ones.
+        if cache.count >= 64 { cache.removeAll() }
         cache[key] = image
         return image
     }

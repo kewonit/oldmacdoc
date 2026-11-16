@@ -63,6 +63,15 @@ final class StackStore {
 
     func pin(_ id: String) -> StackPin? { pins.first { $0.id == id } }
 
+    /// The folder in the dock that `path` is in (or is): the deepest one, so ~/Documents isn't taken for ~/Doc.
+    static func stack(containing path: String, in pins: [StackPin]) -> StackPin? {
+        let target = URL(fileURLWithPath: path).standardizedFileURL.path
+        return pins.filter { pin in
+            let folder = URL(fileURLWithPath: pin.path).standardizedFileURL.path
+            return target == folder || target.hasPrefix(folder.hasSuffix("/") ? folder : folder + "/")
+        }.max { $0.path.count < $1.path.count }
+    }
+
     /// Adds `folder` at `index` among the folders (or moves it there if it's already in), and returns its id.
     @discardableResult
     func add(folder: URL, at index: Int) -> String {
@@ -202,8 +211,9 @@ enum StackFiling {
         for url in urls {
             let source = url.standardizedFileURL
             let destination = target.appendingPathComponent(source.lastPathComponent)
-            if source == target || target.path.hasPrefix(source.path + "/")
-                || source.deletingLastPathComponent().standardizedFileURL == target
+            // Paths, not URLs: a trailing slash makes two URLs for the same folder unequal.
+            if source.path == target.path || target.path.hasPrefix(source.path + "/")
+                || source.deletingLastPathComponent().standardizedFileURL.path == target.path
                 || fm.fileExists(atPath: destination.path) {
                 result[url] = false
                 continue

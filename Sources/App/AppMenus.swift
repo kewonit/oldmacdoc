@@ -17,8 +17,6 @@ enum AccessibilityAccess {
         }
     }
 
-    /// Posted (distributed) whenever any app's Accessibility permission changes.
-    static let changedNotification = Notification.Name("com.apple.accessibility.api")
 }
 
 // MARK: - Small Accessibility helpers
@@ -54,6 +52,8 @@ enum AppWindows {
         if error == .cannotComplete { return nil }
         guard error == .success, let windows = value as? [AXUIElement] else { return [] }
         return windows.compactMap { w in
+            // A timeout set on the app's element isn't inherited by its windows' elements.
+            AXUIElementSetMessagingTimeout(w, 0.3)
             let minimized = ax(w, kAXMinimizedAttribute) as? Bool ?? false
             let subrole = ax(w, kAXSubroleAttribute) as? String
             guard minimized || subrole == kAXStandardWindowSubrole || subrole == kAXDialogSubrole else { return nil }
@@ -91,8 +91,14 @@ final class AppleDockMenus {
     /// How many times Apple's menu has been opened (each one flickers), for testing.
     private(set) var opens = 0
 
+    /// Apple's tile for the menu being opened: found once, used for the reads and checks that follow.
+    private var tileMemo: (key: String, at: TimeInterval, tile: AXUIElement?)?
+
     init(strings: DockStrings) {
         self.strings = strings
+        // A ceiling for every Accessibility call this app makes (elements it doesn't set one on otherwise wait
+        // about 6 s for an app that has stopped answering).
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
         let nc = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             observers.append(nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
@@ -132,10 +138,17 @@ final class AppleDockMenus {
         guard AccessibilityAccess.isTrusted, let tile = tile(for: item) else { return false }
         opens += 1
         AXUIElementPerformAction(tile, "AXShowMenu" as CFString)
-        guard let menu = waitForMenu(of: tile) else { return false }
-        let fresh = AppleMenuMirror.parse(Self.nodes(axChildren(menu), depth: 0), windowTitles: windowTitles, isRunning: pid != nil,
+        // You chose something: worth waiting longer for a slow app's menu.
+        guard let menu = waitForMenu(of: tile, wait: 1.5) else {
+            cancelLateMenu(of: tile)
+            return false
+        }
+        var fresh = AppleMenuMirror.parse(Self.nodes(axChildren(menu), depth: 0), windowTitles: windowTitles, isRunning: pid != nil,
                                           strings: strings)
+        // Read before the press: Open at Login is about to change.
+        if path.titles.last == strings[.openAtLogin], let on = fresh.openAtLogin { fresh.openAtLogin = !on }
         if !fresh.notResponding { cache[Self.key(item)] = Entry(pid: pid ?? 0, snapshot: fresh) }
+        LoginItems.invalidate()
         var level = axChildren(menu)
         var target: AXUIElement?
         for (depth, title) in path.titles.enumerated() {
@@ -182,21 +195,47 @@ final class AppleDockMenus {
         return element
     }
 
-    /// Apple's tile for `item`: by bundle identifier, then by location, then by name.
+    /// Apple's tile for `item`: the one at the same location; else the one with the same bundle identifier
+    /// (an app that has moved); else, only among tiles that don't say where they are, the one with its name.
+    /// Remembered for a moment, as opening one menu asks several times.
     private func tile(for item: DockModel.Item) -> AXUIElement? {
+        let now = ProcessInfo.processInfo.systemUptime
+        if let memo = tileMemo, memo.key == Self.key(item), now - memo.at < 1 { return memo.tile }
+        let found = findTile(for: item)
+        tileMemo = (Self.key(item), now, found)
+        return found
+    }
+
+    private func findTile(for item: DockModel.Item) -> AXUIElement? {
         guard let dock = dockElement(), let list = axChildren(dock).first(where: { axRole($0) == kAXListRole }) else { return nil }
         let tiles = axChildren(list).filter { (ax($0, kAXSubroleAttribute) as? String) == "AXApplicationDockItem" }
         let wanted = item.url.resolvingSymlinksInPath().standardizedFileURL.path
-        var byName: AXUIElement?
+        var byID: AXUIElement?, byName: AXUIElement?
         for tile in tiles {
             let url = (ax(tile, kAXURLAttribute) as? URL) ?? (ax(tile, kAXURLAttribute) as? NSURL).map { $0 as URL }
             if let url {
-                if let id = item.bundleID, Bundle(url: url)?.bundleIdentifier == id { return tile }
                 if url.resolvingSymlinksInPath().standardizedFileURL.path == wanted { return tile }
+                if byID == nil, let id = item.bundleID, Bundle(url: url)?.bundleIdentifier == id { byID = tile }
+            } else if byName == nil, (ax(tile, kAXTitleAttribute) as? String) == item.name {
+                byName = tile
             }
-            if byName == nil, (ax(tile, kAXTitleAttribute) as? String) == item.name { byName = tile }
         }
-        return byName
+        return byID ?? byName
+    }
+
+    /// Apple's menu was asked for but came too late: if it turns up in the next few seconds, close it, so it
+    /// isn't left open at the edge of the screen.
+    private func cancelLateMenu(of tile: AXUIElement) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                if let menu = axChildren(tile).first(where: { axRole($0) == kAXMenuRole }) {
+                    AXUIElementPerformAction(menu, kAXCancelAction as CFString)
+                    return
+                }
+                usleep(20_000)
+            }
+        }
     }
 
     private func waitForMenu(of tile: AXUIElement, wait: TimeInterval = 0.25) -> AXUIElement? {
@@ -210,7 +249,10 @@ final class AppleDockMenus {
 
     private func readMenu(of tile: AXUIElement, wait: TimeInterval) -> [AppleMenuNode]? {
         AXUIElementPerformAction(tile, "AXShowMenu" as CFString)
-        guard let menu = waitForMenu(of: tile, wait: wait) else { return nil }
+        guard let menu = waitForMenu(of: tile, wait: wait) else {
+            cancelLateMenu(of: tile)
+            return nil
+        }
         let nodes = Self.nodes(axChildren(menu), depth: 0)
         AXUIElementPerformAction(menu, kAXCancelAction as CFString)
         return nodes

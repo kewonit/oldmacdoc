@@ -26,10 +26,15 @@ enum LoginItems {
         if let cached, now - cached.at < 1 { return cached.urls }
         guard let calls, let list = calls.create(nil, calls.list, nil)?.takeRetainedValue(),
               let items = calls.snapshot(list, nil)?.takeRetainedValue() as? [AnyObject] else { return nil }
-        let urls = items.compactMap { calls.resolve($0, 0, nil)?.takeRetainedValue() as URL? }
+        // kLSSharedFileListNoUserInteraction | kLSSharedFileListDoNotMountVolumes: an item on a disk that isn't
+        // there must never mount it or put up a dialog.
+        let urls = items.compactMap { calls.resolve($0, 3, nil)?.takeRetainedValue() as URL? }
         cached = (now, urls)
         return urls
     }
+
+    /// Forget the list read last, after Open at Login was just changed.
+    static func invalidate() { cached = nil }
 
     /// Whether the app at `appURL` opens at login, or nil when that can't be told.
     static func contains(_ appURL: URL, bundleID: String?) -> Bool? {

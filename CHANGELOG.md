@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.2.3
+
+Fixes from a full review of 1.2:
+
+- Apple's hidden Dock menu can no longer be left open at the edge of the screen when an app is slow to answer.
+- A busy app can no longer freeze the dock for seconds when you open its menu.
+- A login item on a disk that isn't connected no longer makes a menu try to mount it or show a dialog.
+- With two copies of an app (Xcode and Xcode beta), Open at Login, Assign To and Show All Windows act on the one you clicked.
+- Open at Login shows its new state straight away after you change it.
+- A Grid for a folder with one or two items keeps its title, Back and Open in Finder readable.
+- A big Downloads folder no longer slows the dock each time an app opens or quits.
+- Folders whose names start the same (Doc and Documents) keep their own sort order in a List.
+- A folder in the dock that's renamed or deleted is followed properly.
+
 ## 1.2.2
 
 - **Open at Login and Assign To are always current.** The menu now reads them from macOS every time it opens, so a change made anywhere else shows up at once.

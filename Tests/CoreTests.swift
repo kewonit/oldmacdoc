@@ -963,6 +963,15 @@ final class StackTests: XCTestCase {
         XCTAssertEqual(store.pins[1].display, .stack)
     }
 
+    func testASubfolderBelongsToTheDeepestFolderInTheDock() {
+        let pins = [StackPin(id: "home", path: "/Users/x"), StackPin(id: "doc", path: "/Users/x/Doc"),
+                    StackPin(id: "documents", path: "/Users/x/Documents")]
+        XCTAssertEqual(StackStore.stack(containing: "/Users/x/Documents/Work", in: pins)?.id, "documents", "not ~/Doc, not ~")
+        XCTAssertEqual(StackStore.stack(containing: "/Users/x/Doc", in: pins)?.id, "doc")
+        XCTAssertEqual(StackStore.stack(containing: "/Users/x/Desktop", in: pins)?.id, "home")
+        XCTAssertNil(StackStore.stack(containing: "/Applications", in: pins))
+    }
+
     func testDownloadsSortsByDateAddedAndFirstRunImportsApplesFolders() throws {
         XCTAssertEqual(StackPin(path: "/Users/x/Downloads").sort, .dateAdded)
         XCTAssertEqual(StackPin(path: "/Users/x/Documents").sort, .name)
@@ -1061,6 +1070,8 @@ final class StackFilingTests: XCTestCase {
 
         XCTAssertEqual(StackFiling.file([folder], into: folder.appendingPathComponent("..").appendingPathComponent("Folder"), copy: false)[folder], false,
                        "not into itself")
+        XCTAssertEqual(StackFiling.file([folder], into: URL(fileURLWithPath: folder.path + "/"), copy: false)[folder], false,
+                       "not into itself, trailing slash or not")
         let inside = folder.appendingPathComponent("a.txt")
         XCTAssertEqual(StackFiling.file([inside], into: folder, copy: false)[inside], false, "already there")
     }

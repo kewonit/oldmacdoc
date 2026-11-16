@@ -463,15 +463,19 @@ private final class GridContent: NSView {
     func preferredSize(maxWidth: CGFloat) -> CGSize {
         let columns = StackLayout.gridColumns(count: grid.entries.count, maxWidth: maxWidth)
         grid.columns = columns
-        return StackLayout.gridSize(count: grid.entries.count, columns: columns)
+        var size = StackLayout.gridSize(count: grid.entries.count, columns: columns)
+        // Room for Back, the title and Open in Finder, however few the items.
+        size.width = max(size.width, min(StackLayout.gridMinimumWidth, maxWidth))
+        return size
     }
 
     func layoutContent() {
         let header = StackLayout.gridHeader
-        title.frame = CGRect(x: 60, y: bounds.height - header + 6, width: bounds.width - 120 - 60, height: 20)
+        openButton.sizeToFit()
+        let titleRight = bounds.width - openButton.frame.width - 20
+        title.frame = CGRect(x: 48, y: bounds.height - header + 6, width: max(0, titleRight - 48), height: 20)
         back.frame = CGRect(x: 10, y: bounds.height - header + 4, width: 30, height: 24)
         back.isHidden = path.count < 2
-        openButton.sizeToFit()
         openButton.frame = CGRect(x: bounds.width - openButton.frame.width - 12, y: bounds.height - header + 4,
                                   width: openButton.frame.width, height: 24)
         scroll.frame = CGRect(x: 0, y: 0, width: bounds.width, height: bounds.height - header)

@@ -56,8 +56,10 @@ final class DockView: NSView, NSDraggingSource {
         /// The app's badge (its unread count), over the icon's top right corner.
         let badge = CALayer()
         var badgeLabel: String?
-        /// For a folder: what its art was last drawn from (display, sort and first items).
+        /// For a folder: what its art was last drawn from (display, sort and first items), and when the folder was
+        /// last listed for it.
         var stackKey = ""
+        var stackStamp = ""
         let shadow = CALayer()
         let indicator = CALayer()
         let element = TileElement()
@@ -942,7 +944,7 @@ final class DockView: NSView, NSDraggingSource {
 
     /// A List stack's rows: files open, folders are submenus loaded when they open.
     private func listRows(_ folder: URL, sort: StackSort? = nil, entries: [StackEntry]? = nil) -> [DockMenuItem] {
-        let order = sort ?? model.stacks.pins.first { folder.path.hasPrefix($0.path) }?.sort ?? .name
+        let order = sort ?? StackStore.stack(containing: folder.path, in: model.stacks.pins)?.sort ?? .name
         let shown = entries ?? StackEntry.sorted(StackEntry.contents(of: folder), by: order)
         guard !shown.isEmpty else { return [.header("No Items")] }
         return shown.map { entry in
@@ -956,6 +958,12 @@ final class DockView: NSView, NSDraggingSource {
     /// Draws a folder's tile when what it shows has changed: its first items (as a stack) or its icon.
     private func refreshStackArt(_ id: String, force: Bool) {
         guard let t = tiles[id], let pin = model.stacks.pin(id) else { return }
+        // Listing a big folder (Downloads) isn't free: only when it or the stack's settings have changed. A folder's
+        // modification date moves whenever something is added, removed or renamed in it.
+        let modified = (try? pin.url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate)?.timeIntervalSince1970 ?? 0
+        let stamp = "\(pin.display)-\(pin.sort)-\(modified)"
+        guard force || stamp != t.stackStamp || t.image == nil else { return }
+        t.stackStamp = stamp
         let entries = pin.display == .stack ? Array(StackEntry.sorted(StackEntry.contents(of: pin.url), by: pin.sort).prefix(3)) : []
         let key = "\(pin.display)-\(pin.sort)-" + entries.map(\.url.path).joined(separator: "|")
         guard force || key != t.stackKey || t.image == nil else { return }
@@ -975,7 +983,15 @@ final class DockView: NSView, NSDraggingSource {
             let fd = Darwin.open(pin.path, O_EVTONLY)
             guard fd >= 0 else { continue }
             let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
-            source.setEventHandler { [weak self] in
+            source.setEventHandler { [weak self, weak source] in
+                if let events = source?.data, !events.isDisjoint(with: [.delete, .rename]) {
+                    // The folder itself went or moved: stop watching what was there. The dock is rebuilt (a missing
+                    // folder's tile goes until it's back), and watching starts again on what's at the path now.
+                    source?.cancel()
+                    self?.stackWatchers[id] = nil
+                    self?.model.rebuild()
+                    return
+                }
                 // A burst of changes (a download, a copy) redraws once it settles.
                 self?.stackRefresh[id]?.cancel()
                 let work = DispatchWorkItem { [weak self] in self?.refreshStackArt(id, force: false) }
@@ -1731,7 +1747,8 @@ final class DockView: NSView, NSDraggingSource {
                 state.assignTo = AppleMenuMirror.markAssignTo(rows, assignment: live.assignment, strings: strings)
             }
         }
-        state.canShowAllWindows = app != nil && hasTile
+        // As Apple's: only for an app with windows (those on other desktops, Apple's menu knows about).
+        state.canShowAllWindows = app != nil && hasTile && (!state.windows.isEmpty || snapshot?.canShowAllWindows == true)
         return DockMenuBuilder.app(state, strings: strings)
     }
 

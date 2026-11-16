@@ -47,6 +47,8 @@ enum StackLayout {
     static let gridPadding: CGFloat = 16
     /// Room for the title row (and Open in Finder) at the top of the panel.
     static let gridHeader: CGFloat = 34
+    /// Narrow enough for one item, wide enough for Back, the title and Open in Finder.
+    static let gridMinimumWidth: CGFloat = 340
 
     /// Columns for `count` items: about square, a little wider than tall, and never wider than fits.
     static func gridColumns(count: Int, maxWidth: CGFloat) -> Int {
