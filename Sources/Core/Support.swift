@@ -76,6 +76,16 @@ enum IconMode: String, Codable {
     case retro, original
 }
 
+/// Which side of Mission Control the + for a new desktop sits on. macOS puts it on the side away from
+/// Apple's Dock, so the app chooses it by parking Apple's Dock on the other edge.
+enum AddDesktopSide: String, Codable, CaseIterable, Identifiable {
+    case left, right
+    var id: String { rawValue }
+    var title: String { rawValue.capitalized }
+    /// The edge Apple's Dock waits on to put the + on this side.
+    var dockEdge: String { self == .left ? "right" : "left" }
+}
+
 struct IconOverride: Codable, Equatable {
     var mode: IconMode = .retro
     /// File name inside `Paths.customIcons`.
@@ -90,6 +100,8 @@ struct AppSettings: Codable, Equatable {
     var magnifiedSize: Double = 100
     var autoHide = true
     var showIndicators = true
+    /// Left keeps Apple's Dock on the right edge, as it always was.
+    var addDesktopSide: AddDesktopSide = .left
     var overrides: [String: IconOverride] = [:]
 
     /// The sizes the menu offers, in points.
@@ -108,6 +120,7 @@ struct AppSettings: Codable, Equatable {
         magnifiedSize = c.value(.magnifiedSize, or: d.magnifiedSize)
         autoHide = c.value(.autoHide, or: d.autoHide)
         showIndicators = c.value(.showIndicators, or: d.showIndicators)
+        addDesktopSide = c.value(.addDesktopSide, or: d.addDesktopSide)
         overrides = c.value(.overrides, or: d.overrides)
         // A hand-edited or damaged file can't push the sizes out of range. They're independent: a
         // magnified size below the icon size simply shows no magnification.

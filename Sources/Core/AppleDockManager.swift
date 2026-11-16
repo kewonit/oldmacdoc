@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Darwin
 
@@ -77,6 +78,23 @@ final class AppleDockManager {
     /// "left" or "right" to park Apple's Dock on that edge, or nil to leave its edge alone. Changing
     /// it takes effect at the next `hide()` or `reassertIfNeeded()`.
     var sideEdge: String?
+
+    /// The sides ("left", "right") of the main display with no other display against them, where
+    /// Apple's Dock can wait: against another display it could come up there.
+    static func freeSideEdges(main: CGRect, others: [CGRect]) -> Set<String> {
+        func beside(_ f: CGRect) -> Bool { f.maxY > main.minY && f.minY < main.maxY }
+        var free: Set<String> = []
+        if !others.contains(where: { $0.minX == main.maxX && beside($0) }) { free.insert("right") }
+        if !others.contains(where: { $0.maxX == main.minX && beside($0) }) { free.insert("left") }
+        return free
+    }
+
+    /// The edge for Apple's Dock: `preferred` when it's free, else the other side when that is, else
+    /// nil (leave its edge alone).
+    static func sideEdge(preferring preferred: String, free: Set<String>) -> String? {
+        if free.contains(preferred) { return preferred }
+        return ["right", "left"].first(where: free.contains)
+    }
 
     private let prefs: DockPreferenceStore
     let backupURL: URL

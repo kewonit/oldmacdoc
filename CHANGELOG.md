@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Choose where Mission Control's + goes.** A new Mission Control section in the settings panel puts the Add Desktop button on the left (as before) or on the right.
+
 ## 1.0.0
 
 The first release.

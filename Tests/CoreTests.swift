@@ -336,6 +336,36 @@ final class AppleDockManagerTests: XCTestCase {
         XCTAssertNil(prefs.values["no-bouncing"], "version 2 recorded no-bouncing as unset")
     }
 
+    func testFreeSideEdgesAreTheSidesWithNoDisplayBesideThem() {
+        let main = CGRect(x: 0, y: 0, width: 1512, height: 982)
+        XCTAssertEqual(AppleDockManager.freeSideEdges(main: main, others: []), ["left", "right"])
+        let right = CGRect(x: 1512, y: -200, width: 2560, height: 1440)
+        XCTAssertEqual(AppleDockManager.freeSideEdges(main: main, others: [right]), ["left"])
+        let left = CGRect(x: -1920, y: 0, width: 1920, height: 1080)
+        XCTAssertEqual(AppleDockManager.freeSideEdges(main: main, others: [left]), ["right"])
+        XCTAssertEqual(AppleDockManager.freeSideEdges(main: main, others: [left, right]), [])
+        // Above, or only touching at a corner, it isn't beside the main display.
+        let above = CGRect(x: 0, y: 982, width: 2560, height: 1440)
+        let cornerRight = CGRect(x: 1512, y: 982, width: 1920, height: 1080)
+        XCTAssertEqual(AppleDockManager.freeSideEdges(main: main, others: [above, cornerRight]), ["left", "right"])
+    }
+
+    func testSideEdgeIsThePreferredOneWhenFree() {
+        XCTAssertEqual(AppleDockManager.sideEdge(preferring: "right", free: ["left", "right"]), "right")
+        XCTAssertEqual(AppleDockManager.sideEdge(preferring: "left", free: ["left", "right"]), "left")
+        XCTAssertEqual(AppleDockManager.sideEdge(preferring: "left", free: ["right"]), "right", "the other side when blocked")
+        XCTAssertEqual(AppleDockManager.sideEdge(preferring: "right", free: ["left"]), "left", "the other side when blocked")
+        XCTAssertNil(AppleDockManager.sideEdge(preferring: "right", free: []))
+    }
+
+    func testAddDesktopSideParksAppleDockOnTheOtherEdge() {
+        XCTAssertEqual(AddDesktopSide.left.dockEdge, "right")
+        XCTAssertEqual(AddDesktopSide.right.dockEdge, "left")
+        // The default is how it always was: Apple's Dock on the right on a single display.
+        let free = AppleDockManager.freeSideEdges(main: CGRect(x: 0, y: 0, width: 1512, height: 982), others: [])
+        XCTAssertEqual(AppleDockManager.sideEdge(preferring: AppSettings().addDesktopSide.dockEdge, free: free), "right")
+    }
+
     func testLeftoverSideParkingIsTreatedAsUnset() {
         let prefs = FakePrefs()
         prefs.values["autohide-delay"] = NSNumber(value: AppleDockManager.parkedDelay)
@@ -493,6 +523,16 @@ final class SettingsTests: XCTestCase {
         let old = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"symbolCutout":true,"shelfStyle":"frosted","autoHide":false}"#.utf8))
         XCTAssertEqual(old.shelfStyle, .frosted)
         XCTAssertFalse(old.autoHide)
+        XCTAssertEqual(old.addDesktopSide, .left, "files from before the choice keep the + where it was")
+    }
+
+    func testAddDesktopSideIsSaved() throws {
+        var s = AppSettings()
+        s.addDesktopSide = .right
+        let back = try JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(s))
+        XCTAssertEqual(back.addDesktopSide, .right)
+        let damaged = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"addDesktopSide":"top"}"#.utf8))
+        XCTAssertEqual(damaged.addDesktopSide, .left)
     }
 
     func testOutOfRangeSizesAreClamped() throws {

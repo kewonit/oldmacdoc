@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -14,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var timers: [Timer] = []
     private var dockPrefsObserver: NSObjectProtocol?
     private var screensObserver: NSObjectProtocol?
+    private var addDesktopSideSink: AnyCancellable?
     private var isDuplicate = false
     #if DEBUG
     private var debugObservers: [NSObjectProtocol] = []
@@ -46,14 +48,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Park Apple's Dock before ours appears, so the two are never on screen together. On a free side
         // edge, its Mission Control appearance stays clear of ours, so ours can show there too.
-        appleDock.sideEdge = Self.freeSideEdge()
+        appleDock.sideEdge = wantedSideEdge
         appleDock.hide()
         dock = DockWindowController(model: model, settings: settings, icons: icons)
         dock?.showsInMissionControl = appleDock.sideEdge != nil
         screensObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.screensChanged() }
+            MainActor.assumeIsolated { self?.placeAppleDock() }
         }
+        // Moving Apple's Dock restarts it, so a quick Left, Right, Left in the panel does that once, after
+        // the choice settles, and not at all if it ends where it started.
+        addDesktopSideSink = settings.$settings.map(\.addDesktopSide).removeDuplicates().dropFirst()
+            .debounce(for: .seconds(0.3), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in MainActor.assumeIsolated { self?.placeAppleDock() } }
         // The Dock posts this when its preferences change (Option-Command-D, System Settings), so it can
         // be parked again before it finishes sliding in. The poll catches silent `defaults` writes.
         dockPrefsObserver = DistributedNotificationCenter.default().addObserver(
@@ -74,21 +81,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         timers.append(timer)
     }
 
-    /// A side of the main display with no other display against it, for Apple's Dock to wait on
-    /// (against another display it could come up there). The right is preferred, as Stage Manager
-    /// uses the left. nil when both sides touch a display.
-    static func freeSideEdge() -> String? {
-        guard let main = NSScreen.screens.first?.frame else { return nil }
-        let others = NSScreen.screens.dropFirst().map(\.frame)
-        func beside(_ f: NSRect) -> Bool { f.maxY > main.minY && f.minY < main.maxY }
-        if !others.contains(where: { $0.minX == main.maxX && beside($0) }) { return "right" }
-        if !others.contains(where: { $0.maxX == main.minX && beside($0) }) { return "left" }
-        return nil
+    /// The edge Apple's Dock waits on: the one that puts Mission Control's + where the user chose (the
+    /// right by default, which also keeps clear of Stage Manager on the left), or the other side when a
+    /// display is against that one. nil when both sides touch a display.
+    private var wantedSideEdge: String? {
+        AppleDockManager.sideEdge(preferring: settings.settings.addDesktopSide.dockEdge,
+                                  free: AppleDockManager.mainDisplayFreeSideEdges)
     }
 
-    /// A display came, went or moved: Apple's Dock may need another edge.
-    private func screensChanged() {
-        let edge = Self.freeSideEdge()
+    /// A display came, went or moved, or the + was moved: Apple's Dock may need another edge.
+    private func placeAppleDock() {
+        let edge = wantedSideEdge
         guard appleDock.isParked, edge != appleDock.sideEdge else { return }
         appleDock.sideEdge = edge
         appleDock.reassertIfNeeded()
@@ -159,4 +162,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         debugObservers.append(token)
     }
     #endif
+}
+
+extension AppleDockManager {
+    /// The sides of the main display (the one with the menu bar) with no other display against them.
+    @MainActor static var mainDisplayFreeSideEdges: Set<String> {
+        guard let main = NSScreen.screens.first?.frame else { return [] }
+        return freeSideEdges(main: main, others: NSScreen.screens.dropFirst().map(\.frame))
+    }
 }

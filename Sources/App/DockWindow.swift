@@ -459,6 +459,7 @@ final class DockWindowController {
             case "keep" where parts.count > 2: self.view.model.setPinned(arg, parts[2] == "on")
             case "style": ShelfStyle(rawValue: arg).map { self.settings.settings.shelfStyle = $0 }
             case "finish": FinishLevel(rawValue: arg).map { self.settings.settings.finish = $0 }
+            case "add-desktop": AddDesktopSide(rawValue: arg).map { self.settings.settings.addDesktopSide = $0 }
             case "size": Double(arg).map { self.settings.settings.iconSize = $0 }
             case "stats":
                 // Appends a line to oldmacdoc-stats.txt in the user's temporary folder.

@@ -13,7 +13,7 @@ DistributedNotificationCenter.default().postNotificationName(
     .init("com.kewonit.oldmacdoc.debug"), object: "pointer 760", userInfo: nil, deliverImmediately: true)
 ```
 
-Commands: `pointer <x>` (hover at x, holds until `pointer` with no value), `hold on|off` (ignore the real mouse and rest the dock), `press <x>` (show the pressed state), `poof <x>`, `menu <x>` (open that icon's menu for 2 s), `keep <bundle-id> on|off`, `reveal`, `hide`, `style clear|frosted|smoke`, `finish off|subtle|full`, `size <points>`, `stats` (append frame pacing since the last `stats` to `oldmacdoc-stats.txt` in the user's temporary folder, `$(getconf DARWIN_USER_TEMP_DIR)`), `panel` / `panel off` (the settings panel), `about`, `appearance light|dark` (this app only; no value goes back to the system's). These aren't compiled into Release builds.
+Commands: `pointer <x>` (hover at x, holds until `pointer` with no value), `hold on|off` (ignore the real mouse and rest the dock), `press <x>` (show the pressed state), `poof <x>`, `menu <x>` (open that icon's menu for 2 s), `keep <bundle-id> on|off`, `reveal`, `hide`, `style clear|frosted|smoke`, `finish off|subtle|full`, `add-desktop left|right` (where Mission Control's + goes, which moves Apple's parked Dock to the other edge), `size <points>`, `stats` (append frame pacing since the last `stats` to `oldmacdoc-stats.txt` in the user's temporary folder, `$(getconf DARWIN_USER_TEMP_DIR)`), `panel` / `panel off` (the settings panel), `about`, `appearance light|dark` (this app only; no value goes back to the system's). These aren't compiled into Release builds.
 
 Pair the commands with `screencapture -l <window id>` to capture the dock window on its own.
 

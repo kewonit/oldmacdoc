@@ -20,6 +20,9 @@ final class SettingsPanelModel: ObservableObject {
     @Published private(set) var shelfPictures: [ShelfStyle: CGImage] = [:]
     @Published private(set) var loginStatus: SMAppService.Status = .notRegistered
     @Published private(set) var loginError: String?
+    /// The sides of the main display Apple's Dock can wait on. The panel closes when displays change,
+    /// so reading them when it opens is enough.
+    @Published private(set) var freeSideEdges: Set<String> = ["left", "right"]
 
     static let pictureSize = CGSize(width: 150, height: 40)
 
@@ -30,6 +33,7 @@ final class SettingsPanelModel: ObservableObject {
         self.largestFitting = largestFitting
         loginStatus = SMAppService.mainApp.status
         loginError = nil
+        freeSideEdges = AppleDockManager.mainDisplayFreeSideEdges
         let scale = screen?.backingScaleFactor ?? 2
         let wallpaper = Self.wallpaper(for: screen)
         var pictures: [ShelfStyle: CGImage] = [:]
@@ -89,6 +93,8 @@ struct SettingsView: View {
                 switchRow("Lights for open apps", isOn: $store.settings.showIndicators)
                 loginToggle
             }
+            Divider().padding(.vertical, 12)
+            missionControl
             if let version = updater.availableVersion {
                 updateRow(version)
                     .padding(.top, 12)
@@ -215,6 +221,41 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    // MARK: Mission Control
+
+    /// Which side Mission Control's + for a new desktop sits on. Apple's Dock waits on the other edge.
+    private var missionControl: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Mission Control").font(.headline)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text("Add Desktop button").accessibilityHidden(true)
+                    Spacer(minLength: 8)
+                    Picker("Add Desktop button in Mission Control", selection: $store.settings.addDesktopSide) {
+                        ForEach(AddDesktopSide.allCases) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                if let note = addDesktopNote {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
+    }
+
+    /// Why the + can't go where it was asked for: Apple's Dock would have to wait on an edge with
+    /// another display against it. Decided the same way as where the app really puts it.
+    private var addDesktopNote: String? {
+        let edge = store.settings.addDesktopSide.dockEdge
+        guard AppleDockManager.sideEdge(preferring: edge, free: model.freeSideEdges) != edge else { return nil }
+        return "Needs the main display’s \(edge) edge free of other displays."
     }
 
     private func updateRow(_ version: String) -> some View {
