@@ -188,6 +188,8 @@ struct AppMenuState: Equatable {
     /// Nil when it can't be known: the row is left out.
     var openAtLogin: Bool?
     var openAtLoginCommand: DockCommand = .toggleOpenAtLogin
+    /// Open at Login is changed through Apple's Dock: without a tile there, it's shown but can't be chosen.
+    var openAtLoginEnabled = true
     /// Apple's Assign To block (its title, then the choices), when there's more than one desktop.
     var assignTo: [DockMenuItem] = []
     var canShowAllWindows = false
@@ -222,7 +224,7 @@ enum DockMenuBuilder {
                 options.append(.item(strings[.removeFromDock], .toggleKeepInDock))
             }
             if let login = s.openAtLogin {
-                options.append(.item(strings[.openAtLogin], s.openAtLoginCommand, mark: login ? .check : .none))
+                options.append(.item(strings[.openAtLogin], s.openAtLoginCommand, mark: login ? .check : .none, enabled: s.openAtLoginEnabled))
             }
             options.append(.item(strings[.showInFinder], .showInFinder))
         }

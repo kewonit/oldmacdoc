@@ -512,6 +512,12 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(s.iconSize, AppSettings().iconSize)
     }
 
+    func testItemsFromApplesDockAreOnByDefaultAndForOlderFiles() throws {
+        XCTAssertTrue(AppSettings().appleMenuItems)
+        XCTAssertTrue(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"finish":"off"}"#.utf8)).appleMenuItems)
+        XCTAssertFalse(try JSONDecoder().decode(AppSettings.self, from: Data(#"{"appleMenuItems":false}"#.utf8)).appleMenuItems)
+    }
+
     func testLightsForOpenAppsAreOnByDefault() throws {
         XCTAssertTrue(AppSettings().showIndicators)
         let saved = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"finish":"off"}"#.utf8))
@@ -1057,5 +1063,51 @@ final class StackFilingTests: XCTestCase {
                        "not into itself")
         let inside = folder.appendingPathComponent("a.txt")
         XCTAssertEqual(StackFiling.file([inside], into: folder, copy: false)[inside], false, "already there")
+    }
+}
+
+
+final class LiveMenuStateTests: XCTestCase {
+    /// As macOS 27 stores it: a built-in display with three desktops (one current) and one full-screen app,
+    /// and a second display with none.
+    private let config: [String: Any] = ["Management Data": ["Monitors": [
+        ["Current Space": ["uuid": "B"], "Spaces": [["uuid": "A", "type": 0], ["uuid": "B", "type": 0], ["uuid": "C", "type": 0],
+                                                     ["uuid": "F", "type": 4]]],
+        ["Current Space": [String: Any](), "Spaces": [[String: Any]]()],
+    ]]]
+
+    func testDesktopAssignmentFromSpacesRecords() {
+        func parse(_ bindings: [String: Any]) -> DesktopAssignment {
+            DesktopAssignment.parse(bindings: bindings, config: config, bundleID: "com.example.App").assignment
+        }
+        XCTAssertEqual(parse([:]), DesktopAssignment.none)
+        XCTAssertEqual(parse(["com.example.app": "AllSpaces"]), .all, "bundle ids match without regard to case")
+        XCTAssertEqual(parse(["com.example.App": "B"]), .thisDesktop)
+        XCTAssertEqual(parse(["com.example.App": "C"]), .otherDesktop)
+        XCTAssertEqual(parse(["com.other": "AllSpaces"]), DesktopAssignment.none)
+        XCTAssertEqual(DesktopAssignment.parse(bindings: [:], config: config, bundleID: "x").desktops, 3, "full-screen spaces don't count")
+        XCTAssertEqual(DesktopAssignment.parse(bindings: [:], config: nil, bundleID: "x").desktops, 0)
+    }
+
+    func testAssignToRowsAreTickedFromTheLiveAssignment() {
+        let rows: [DockMenuItem] = [.header("Assign To"), .item("All Desktops", .none, mark: .check), .item("This Desktop", .none),
+                                    .item("Desktop on Display 2", .none, mark: .check), .item("None", .none)]
+        func ticked(_ a: DesktopAssignment) -> [String] {
+            AppleMenuMirror.markAssignTo(rows, assignment: a, strings: .english).filter { $0.mark == .check }.map(\.title)
+        }
+        XCTAssertEqual(ticked(.thisDesktop), ["This Desktop"])
+        XCTAssertEqual(ticked(.all), ["All Desktops"])
+        XCTAssertEqual(ticked(.none), ["None"])
+        XCTAssertEqual(ticked(.otherDesktop), [])
+        XCTAssertEqual(AppleMenuMirror.markAssignTo(rows, assignment: .all, strings: .english).first?.kind, .header)
+    }
+
+    func testLoginItemsMatchByLocationOrBundleIdentifier() {
+        let items = [URL(fileURLWithPath: "/Applications/Mail.app"), URL(fileURLWithPath: "/Users/x/Apps/Notes Copy.app")]
+        XCTAssertTrue(LoginItemMatch.matches(items, appURL: URL(fileURLWithPath: "/Applications/Mail.app/"), bundleID: nil))
+        XCTAssertTrue(LoginItemMatch.matches(items, appURL: URL(fileURLWithPath: "/System/Applications/Notes.app"), bundleID: "com.apple.Notes",
+                                             bundleIDOf: { $0.lastPathComponent == "Notes Copy.app" ? "com.apple.Notes" : nil }))
+        XCTAssertFalse(LoginItemMatch.matches(items, appURL: URL(fileURLWithPath: "/Applications/Safari.app"), bundleID: "com.apple.Safari",
+                                              bundleIDOf: { _ in nil }))
     }
 }

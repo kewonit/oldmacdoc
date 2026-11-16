@@ -1183,6 +1183,7 @@ final class DockView: NSView, NSDraggingSource {
         state["capturesPointer"] = capturesPointer
         state["shown"] = isShown
         state["separatorX"] = separatorX as Any
+        state["appleMenuOpens"] = appleMenus.opens
         state["tiles"] = displayOrder.compactMap { id -> [String: Any]? in
             guard let t = tiles[id] else { return nil }
             return ["id": id, "x": t.frame.midX, "running": t.item?.isRunning ?? false, "name": t.item?.name ?? "Trash",
@@ -1706,15 +1707,31 @@ final class DockView: NSView, NSDraggingSource {
                 slow = true
             }
         }
-        if let snapshot = appleMenus.snapshot(for: item, pid: app?.processIdentifier, windowTitles: Set(state.windows.map(\.title)),
-                                              fresh: slow) {
+        // The app's own items and recent files come from Apple's menu, read once per app (each read flickers at the
+        // screen's edge), unless that's switched off. A slow app's is read afresh: only Apple's Dock says it's hung.
+        let pid = app?.processIdentifier
+        let fromApple = settings.settings.appleMenuItems
+        let snapshot = fromApple || slow
+            ? appleMenus.snapshot(for: item, pid: pid, windowTitles: Set(state.windows.map(\.title)), fresh: slow)
+            : appleMenus.remembered(for: item, pid: pid)
+        if let snapshot {
             state.notResponding = slow && snapshot.notResponding
-            state.appleGroups = snapshot.groups
+            if fromApple { state.appleGroups = snapshot.groups }
             state.openAtLogin = snapshot.openAtLogin
-            if let path = snapshot.openAtLoginPath { state.openAtLoginCommand = .apple(path) }
-            state.assignTo = snapshot.assignTo
-            state.canShowAllWindows = app != nil && snapshot.canShowAllWindows
         }
+        // Open at Login and Assign To are read live, so they're never out of date; changing them replays Apple's row.
+        let hasTile = appleMenus.hasTile(for: item)
+        if !state.isFinder, let live = LoginItems.contains(item.url, bundleID: item.bundleID) { state.openAtLogin = live }
+        state.openAtLoginCommand = .apple(snapshot?.openAtLoginPath ?? AppleMenuMirror.openAtLoginPath(strings: strings))
+        state.openAtLoginEnabled = hasTile
+        if hasTile, let id = item.bundleID {
+            let live = DesktopAssignments.read(bundleID: id)
+            if live.desktops > 1 {
+                let rows = snapshot.map(\.assignTo).flatMap { $0.isEmpty ? nil : $0 } ?? AppleMenuMirror.standardAssignTo(strings: strings)
+                state.assignTo = AppleMenuMirror.markAssignTo(rows, assignment: live.assignment, strings: strings)
+            }
+        }
+        state.canShowAllWindows = app != nil && hasTile
         return DockMenuBuilder.app(state, strings: strings)
     }
 
@@ -1759,7 +1776,8 @@ final class DockView: NSView, NSDraggingSource {
         case .focusWindow(let i):
             if let app, i < menuWindows.count { AppWindows.focus(menuWindows[i].element, of: app) }
         case .apple(let path):
-            if !appleMenus.press(path, for: item) { NSSound.beep() }
+            let titles = Set(menuWindows.map(\.info.title))
+            if !appleMenus.press(path, for: item, pid: app?.processIdentifier, windowTitles: titles) { NSSound.beep() }
         case .iconMode(let mode): updateOverride(item) { $0.mode = mode }
         case .chooseIconImage: chooseImage(for: item)
         case .resetIcon: resetIcon(for: item)

@@ -103,6 +103,9 @@ struct AppSettings: Codable, Equatable {
     /// Left keeps Apple's Dock on the right edge, as it always was.
     var addDesktopSide: AddDesktopSide = .left
     var overrides: [String: IconOverride] = [:]
+    /// Each app's own menu items and recent files, copied from Apple's Dock (which makes its menu flicker
+    /// at the screen's edge once per app). Off, Apple's Dock menus are only opened to carry out a choice.
+    var appleMenuItems = true
 
     /// The sizes the menu offers, in points.
     static let iconSizeRange: ClosedRange<Double> = 32...96
@@ -122,6 +125,7 @@ struct AppSettings: Codable, Equatable {
         showIndicators = c.value(.showIndicators, or: d.showIndicators)
         addDesktopSide = c.value(.addDesktopSide, or: d.addDesktopSide)
         overrides = c.value(.overrides, or: d.overrides)
+        appleMenuItems = c.value(.appleMenuItems, or: d.appleMenuItems)
         // A hand-edited or damaged file can't push the sizes out of range. They're independent: a
         // magnified size below the icon size simply shows no magnification.
         iconSize = Self.clamp(iconSize, to: Self.iconSizeRange, or: d.iconSize)

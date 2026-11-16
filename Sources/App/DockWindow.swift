@@ -519,6 +519,7 @@ final class DockWindowController {
             case "finish": FinishLevel(rawValue: arg).map { self.settings.settings.finish = $0 }
             case "add-desktop": AddDesktopSide(rawValue: arg).map { self.settings.settings.addDesktopSide = $0 }
             case "size": Double(arg).map { self.settings.settings.iconSize = $0 }
+            case "apple-items": self.settings.settings.appleMenuItems = arg != "off"
             case "stats":
                 // Appends a line to oldmacdoc-stats.txt in the user's temporary folder.
                 let url = FileManager.default.temporaryDirectory.appendingPathComponent("oldmacdoc-stats.txt")

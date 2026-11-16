@@ -98,6 +98,19 @@ enum AppleMenuMirror {
         return snapshot
     }
 
+    /// Assign To as Apple's Dock words it, for when its menu hasn't been read: choosing a row replays Apple's
+    /// row of the same name in Options.
+    static func standardAssignTo(strings: DockStrings) -> [DockMenuItem] {
+        [.header(strings[.assignTo])] + [DockStrings.Key.allDesktops, .thisDesktop, .none].map { key in
+            .item(strings[key], .apple(AppleMenuPath(indexes: [0, 0], titles: [strings[.options], strings[key]])))
+        }
+    }
+
+    /// Open at Login in Apple's Options, found by name when chosen.
+    static func openAtLoginPath(strings: DockStrings) -> AppleMenuPath {
+        AppleMenuPath(indexes: [0, 1], titles: [strings[.options], strings[.openAtLogin]])
+    }
+
     /// Apple lists a running app's windows first. A group is that list if it marks the main window (✓) or a
     /// minimized one (◆), or names one of the app's windows (those on other desktops aren't always named).
     static func looksLikeWindows(_ nodes: [AppleMenuNode], windowTitles: Set<String>) -> Bool {

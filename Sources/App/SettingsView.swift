@@ -97,7 +97,7 @@ struct SettingsView: View {
                 switchRow("Hide automatically", isOn: $store.settings.autoHide)
                 switchRow("Lights for open apps", isOn: $store.settings.showIndicators)
                 loginToggle
-                if !model.accessibilityAllowed { accessibilityRow }
+                if model.accessibilityAllowed { appleItemsToggle } else { accessibilityRow }
             }
             Divider().padding(.vertical, 12)
             missionControl
@@ -226,6 +226,17 @@ struct SettingsView: View {
                     .foregroundStyle(.red)
                     .fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    /// Copying each app's own items from Apple's Dock flickers its menu at the screen's edge once per app.
+    private var appleItemsToggle: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            switchRow("Items from Apple’s Dock", isOn: $store.settings.appleMenuItems)
+            Text("Each app’s own menu items, like New Window, and its recent files. Reading them makes Apple’s hidden Dock flicker at the edge of the screen once per app.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

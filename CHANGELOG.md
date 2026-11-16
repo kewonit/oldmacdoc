@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.2.2
+
+- **Open at Login and Assign To are always current.** The menu now reads them from macOS every time it opens, so a change made anywhere else shows up at once.
+- **Fewer flickers.** Only an app's own items (like New Window) and its recent files are copied from Apple's hidden Dock, once per app. When you choose one of them, the copy is refreshed in the same step, with no extra flicker.
+- **A new switch: Items from Apple's Dock.** Turn it off in the settings panel and Apple's Dock never flickers at the edge of the screen; menus then leave out apps' own items and recent files.
+
 ## 1.2.1
 
 - **Menus and stacks follow the pointer at once.** In 1.2.0 the highlight in the right-click menu, and in Fan and Grid stacks, could lag seconds behind the pointer. It now moves with it.

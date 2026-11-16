@@ -88,6 +88,8 @@ final class AppleDockMenus {
     }
     private var cache: [String: Entry] = [:]
     private var observers: [NSObjectProtocol] = []
+    /// How many times Apple's menu has been opened (each one flickers), for testing.
+    private(set) var opens = 0
 
     init(strings: DockStrings) {
         self.strings = strings
@@ -112,7 +114,9 @@ final class AppleDockMenus {
         let remembered = cache[Self.key(item)].flatMap { $0.pid == (pid ?? 0) ? $0.snapshot : nil }
         if !fresh, let remembered { return remembered }
         // A slow app's menu takes Apple's Dock a moment longer: it waits on the app before saying it isn't responding.
-        guard let tile = tile(for: item), let nodes = readMenu(of: tile, wait: fresh ? 2.5 : 0.25) else { return remembered }
+        guard let tile = tile(for: item) else { return remembered }
+        opens += 1
+        guard let nodes = readMenu(of: tile, wait: fresh ? 2.5 : 0.25) else { return remembered }
         let snapshot = AppleMenuMirror.parse(nodes, windowTitles: windowTitles, isRunning: pid != nil, strings: strings)
         // While it isn't responding Apple's menu leaves out the app's own items: that isn't kept, so they're
         // back as soon as it recovers.
@@ -121,13 +125,17 @@ final class AppleDockMenus {
         return snapshot
     }
 
-    /// Chooses an item of Apple's menu for `item`. Updates what's remembered where the result is known
-    /// (Open at Login, Assign To), so the next menu shows it without reading Apple's again.
+    /// Chooses an item of Apple's menu for `item`. Apple's menu is open anyway to do that, so what's remembered
+    /// is read again first (no extra flicker): the app's own items and recent files stay current as you use them.
     @discardableResult
-    func press(_ path: AppleMenuPath, for item: DockModel.Item) -> Bool {
+    func press(_ path: AppleMenuPath, for item: DockModel.Item, pid: pid_t?, windowTitles: Set<String>) -> Bool {
         guard AccessibilityAccess.isTrusted, let tile = tile(for: item) else { return false }
+        opens += 1
         AXUIElementPerformAction(tile, "AXShowMenu" as CFString)
         guard let menu = waitForMenu(of: tile) else { return false }
+        let fresh = AppleMenuMirror.parse(Self.nodes(axChildren(menu), depth: 0), windowTitles: windowTitles, isRunning: pid != nil,
+                                          strings: strings)
+        if !fresh.notResponding { cache[Self.key(item)] = Entry(pid: pid ?? 0, snapshot: fresh) }
         var level = axChildren(menu)
         var target: AXUIElement?
         for (depth, title) in path.titles.enumerated() {
@@ -146,26 +154,23 @@ final class AppleDockMenus {
             AXUIElementPerformAction(menu, kAXCancelAction as CFString)
             return false
         }
-        remember(path, for: item)
         return true
+    }
+
+    /// What was last read from Apple's menu for `item`, without reading it again.
+    func remembered(for item: DockModel.Item, pid: pid_t?) -> AppleMenuSnapshot? {
+        cache[Self.key(item)].flatMap { $0.pid == (pid ?? 0) ? $0.snapshot : nil }
+    }
+
+    /// Whether Apple's Dock has a tile for `item` (found without opening anything).
+    func hasTile(for item: DockModel.Item) -> Bool {
+        AccessibilityAccess.isTrusted && tile(for: item) != nil
     }
 
     /// App Exposé for `item`, as Apple's Show All Windows does.
     func showAllWindows(for item: DockModel.Item) {
         guard AccessibilityAccess.isTrusted, let tile = tile(for: item) else { return }
         AXUIElementPerformAction(tile, "AXShowExpose" as CFString)
-    }
-
-    private func remember(_ path: AppleMenuPath, for item: DockModel.Item) {
-        guard var entry = cache[Self.key(item)] else { return }
-        if path == entry.snapshot.openAtLoginPath, let on = entry.snapshot.openAtLogin {
-            entry.snapshot.openAtLogin = !on
-        } else if let chosen = entry.snapshot.assignTo.firstIndex(where: { $0.command == .apple(path) }) {
-            for i in entry.snapshot.assignTo.indices where entry.snapshot.assignTo[i].kind == .item {
-                entry.snapshot.assignTo[i].mark = i == chosen ? .check : .none
-            }
-        }
-        cache[Self.key(item)] = entry
     }
 
     // MARK: Apple's Dock
