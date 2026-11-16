@@ -12,6 +12,9 @@ final class DockModel {
         var isRunning: Bool
         /// "Keep in Dock" state. A running app that is unchecked or dragged off stays in place until it quits.
         var keepsInDock: Bool
+        /// Set for a folder (a stack), after the apps; nil for an app.
+        var stackID: String?
+        var isStack: Bool { stackID != nil }
     }
 
     struct Pin: Codable, Equatable {
@@ -27,13 +30,24 @@ final class DockModel {
 
     private(set) var pins: [Pin]
     private(set) var items: [Item] = []
+    /// Running apps' process ids by item id, as of the last rebuild (for badges, which are checked often).
+    private(set) var pids: [String: pid_t] = [:]
+    /// Folders in the dock, kept in their own file (stacks.json), so dock.json stays as it was.
+    let stacks: StackStore
     var onChange: (() -> Void)?
 
     private let storeURL: URL
     private var observers: [NSObjectProtocol] = []
 
-    init(storeURL: URL = Paths.dockFile) {
+    init(storeURL: URL = Paths.dockFile, stacksURL: URL = Paths.stacksFile) {
         self.storeURL = storeURL
+        // New users get the folders from Apple's Dock too (Downloads, typically); existing docks don't change.
+        let firstRun = !FileManager.default.fileExists(atPath: storeURL.path)
+        stacks = StackStore(url: stacksURL) {
+            guard firstRun else { return [] }
+            let others = CFPreferencesCopyAppValue("persistent-others" as CFString, "com.apple.dock" as CFString) as? [[String: Any]] ?? []
+            return StackStore.appleDockFolders(others)
+        }
         pins = JSONFile.load([Pin].self, from: storeURL) ?? Self.importAppleDockPins()
         normalizeFinder()
         save()
@@ -64,6 +78,12 @@ final class DockModel {
             save()
         }
 
+        var pidsByID: [String: pid_t] = [:]
+        for app in running {
+            if let id = app.bundleIdentifier { pidsByID[id] = app.processIdentifier }
+            if let path = app.bundleURL?.path { pidsByID[path] = app.processIdentifier }
+        }
+        pids = pidsByID
         var result: [Item] = []
         var seen = Set<String>()
         for pin in pins {
@@ -80,6 +100,11 @@ final class DockModel {
                                name: app.localizedName ?? Self.displayName(url), isPinned: false, isRunning: true,
                                keepsInDock: false))
         }
+        // Folders follow the apps; a folder that's gone (an unplugged disk) keeps its place for when it's back.
+        for stack in stacks.pins where FileManager.default.fileExists(atPath: stack.path) {
+            result.append(Item(id: stack.id, url: stack.url, bundleID: nil, name: stack.name, isPinned: true,
+                               isRunning: false, keepsInDock: true, stackID: stack.id))
+        }
         if result != items {
             items = result
             onChange?()
@@ -95,12 +120,49 @@ final class DockModel {
     }
 
     func canRemove(_ id: String) -> Bool { id != Self.finderID }
+    func isStack(_ id: String) -> Bool { stacks.pin(id) != nil }
+
+    // MARK: Stacks
+
+    /// Adds a folder at `index` among the folders on the dock (or moves it there if it's already in).
+    func addStack(folder: URL, at index: Int) {
+        let path = folder.standardizedFileURL.path
+        stacks.add(folder: folder, at: storedIndex(index, excluding: stacks.pins.first { $0.path == path }?.id))
+        rebuild()
+    }
+
+    func moveStack(_ id: String, to index: Int) {
+        stacks.move(id, to: storedIndex(index, excluding: id))
+        rebuild()
+    }
+
+    /// The place in stacks.json for a place among the folders on the dock: folders that are missing right
+    /// now (an unplugged disk) are in the file but not on the dock.
+    private func storedIndex(_ index: Int, excluding id: String?) -> Int {
+        let stored = stacks.pins.filter { $0.id != id }
+        let shown = stored.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard index < shown.count else { return stored.count }
+        return stored.firstIndex { $0.id == shown[max(index, 0)].id } ?? stored.count
+    }
+
+    func updateStack(_ id: String, _ change: (inout StackPin) -> Void) {
+        stacks.update(id, change)
+        rebuild()
+    }
     func canMove(_ id: String) -> Bool { id != Self.finderID }
 
     // MARK: Editing
 
     /// "Keep in Dock". Unpinning a running app keeps it in place until it quits, like the original Dock.
     func setPinned(_ id: String, _ pinned: Bool) {
+        if isStack(id) {
+            // A folder is only ever removed (dragged off, or Remove from Dock).
+            if !pinned {
+                stacks.remove(id)
+                rebuild()
+            }
+            return
+        }
         if pinned {
             if let i = pins.firstIndex(where: { $0.id == id }) {
                 pins[i].removeOnQuit = nil
@@ -118,7 +180,7 @@ final class DockModel {
 
     /// Pins `id` at `index` of the visible order (clamped to the pinned section, after Finder).
     func place(_ id: String, at index: Int) {
-        guard let item = item(id) else { return }
+        guard let item = item(id), !item.isStack else { return }
         move(Pin(path: item.url.path, bundleID: item.bundleID), to: index)
     }
 
@@ -129,7 +191,7 @@ final class DockModel {
     private func move(_ pin: Pin, to index: Int) {
         var kept = pins.first { $0.id == pin.id } ?? pin
         kept.removeOnQuit = nil // placing an icon keeps it
-        var visible = items.filter(\.isPinned).map(\.id).filter { $0 != pin.id }
+        var visible = items.filter { $0.isPinned && !$0.isStack }.map(\.id).filter { $0 != pin.id }
         // Pins whose app is missing right now keep their place at the end.
         let missing = pins.filter { p in p.id != pin.id && !visible.contains(p.id) }
         visible.insert(pin.id, at: max(pin.id == Self.finderID ? 0 : 1, min(index, visible.count)))

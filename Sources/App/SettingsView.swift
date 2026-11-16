@@ -9,6 +9,8 @@ struct SettingsActions {
     var openLoginItems: () -> Void
     /// The Magnification slider is being dragged (the dock shows magnification meanwhile).
     var magnifying: (Bool) -> Void
+    /// Asks for Accessibility and opens its page in System Settings.
+    var openAccessibility: () -> Void = {}
 }
 
 /// State of the panel that doesn't live in the settings, read each time it opens: how big the dock can
@@ -23,6 +25,8 @@ final class SettingsPanelModel: ObservableObject {
     /// The sides of the main display Apple's Dock can wait on. The panel closes when displays change,
     /// so reading them when it opens is enough.
     @Published private(set) var freeSideEdges: Set<String> = ["left", "right"]
+    /// Whether the dock's menus can show each app's windows and its own items.
+    @Published private(set) var accessibilityAllowed = true
 
     static let pictureSize = CGSize(width: 150, height: 40)
 
@@ -34,6 +38,7 @@ final class SettingsPanelModel: ObservableObject {
         loginStatus = SMAppService.mainApp.status
         loginError = nil
         freeSideEdges = AppleDockManager.mainDisplayFreeSideEdges
+        accessibilityAllowed = AccessibilityAccess.isTrusted
         let scale = screen?.backingScaleFactor ?? 2
         let wallpaper = Self.wallpaper(for: screen)
         var pictures: [ShelfStyle: CGImage] = [:]
@@ -92,6 +97,7 @@ struct SettingsView: View {
                 switchRow("Hide automatically", isOn: $store.settings.autoHide)
                 switchRow("Lights for open apps", isOn: $store.settings.showIndicators)
                 loginToggle
+                if !model.accessibilityAllowed { accessibilityRow }
             }
             Divider().padding(.vertical, 12)
             missionControl
@@ -221,6 +227,17 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// Shown only while Accessibility isn't allowed: what it adds, and where to allow it.
+    private var accessibilityRow: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("Menus show each app’s windows and its own items once OldMacDoc may use Accessibility.")
+                .fixedSize(horizontal: false, vertical: true)
+            Button("Allow in System Settings…", action: actions.openAccessibility).buttonStyle(.link)
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
 
     // MARK: Mission Control

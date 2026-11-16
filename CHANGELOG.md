@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+
+- **The original Dock's menus, pointer and all.** Right-click, Control-click or click and hold an icon: its menu hangs above it with the pointer aimed at it, light on Clear Glass and charcoal on Frosted and Smoke, as in Leopard and Snow Leopard. It lists the app's windows, the app's own items (Safari's New Window, Music's controls), Options with Keep in Dock, Open at Login, Show in Finder and Assign To, then Show All Windows, Hide and Quit; hold Option for Hide Others and Force Quit. Finder, the Trash and the separator have theirs too. Press, drag and release, arrow keys and typing all work.
+- **Folders, as Leopard's Stacks.** Drop a folder on the dock. Click it for a Fan or a Grid (or a List), drag items out, drop files on it to move them in, and choose how it's sorted and shown from its menu. Downloads hops when a download finishes.
+- **Badges.** The red counts apps put on their icons now show on the dock, in Leopard's glossy style.
+- **One permission, asked once: Accessibility.** It lets menus show each app's windows and its own items. Everything else works without it, and the settings panel shows how to allow it later.
+- **Launchpad no longer closes OldMacDoc.** Clicking Launchpad (Apps on macOS 26 and later), Mission Control, or an app that quits as soon as it opens made the dock quit. They now open without a bounce, as in Apple's Dock, and an app that quits or crashes while opening stops bouncing at once.
+- **The settings panel can't crash** when every display goes away while it's open.
+
 ## 1.1.0
 
 - **Choose where Mission Control's + goes.** A new Mission Control section in the settings panel puts the Add Desktop button on the left (as before) or on the right.

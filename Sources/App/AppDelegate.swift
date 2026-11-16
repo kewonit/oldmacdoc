@@ -52,6 +52,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         appleDock.hide()
         dock = DockWindowController(model: model, settings: settings, icons: icons)
         dock?.showsInMissionControl = appleDock.sideEdge != nil
+        dock?.view.openSettings = { [weak self] in self?.settingsPanel.open() }
+        // Each app's windows and its own menu items need Accessibility. macOS asks once; after that the
+        // settings panel shows whether it's allowed, with a way to System Settings.
+        let askedKey = "AskedForAccessibility"
+        if !AccessibilityAccess.isTrusted, !UserDefaults.standard.bool(forKey: askedKey) {
+            UserDefaults.standard.set(true, forKey: askedKey)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { AccessibilityAccess.ask() }
+        }
         screensObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.placeAppleDock() }

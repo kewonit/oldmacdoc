@@ -162,6 +162,7 @@ final class DockWindowController {
     }
 
     func close() {
+        view.closeMenu()
         view.tearDown()
         monitors.forEach(NSEvent.removeMonitor)
         monitors.removeAll()
@@ -314,7 +315,10 @@ final class DockWindowController {
         revealWork?.cancel()
         revealWork = nil
         lastEdgeEvent = 0
-        if !show { panel.ignoresMouseEvents = true }
+        if !show {
+            view.closeMenu()
+            panel.ignoresMouseEvents = true
+        }
         view.setShown(show)
         updateStuckCheck()
         // The pointer is already on the edge: start tracking it (and magnifying) straight away.
@@ -326,6 +330,8 @@ final class DockWindowController {
 
     /// macOS started or stopped drawing its own Dock (Mission Control, App Exposé, a forced reveal).
     private func systemDockChanged(_ showing: Bool) {
+        // Menus close for Mission Control and App Exposé, as Apple's do.
+        if showing { view.closeMenu() }
         if showsInMissionControl {
             // Apple's is a strip on the side: ours comes up for as long as Mission Control is open.
             view.setSteppedAside(false)
@@ -442,20 +448,67 @@ final class DockWindowController {
             guard let self, let command = n.object as? String else { return }
             let parts = command.split(separator: " ").map(String.init)
             let arg = parts.count > 1 ? parts[1] : ""
+            func point(_ i: Int) -> NSPoint? {
+                guard parts.count > i + 1, let x = Double(parts[i]), let y = Double(parts[i + 1]) else { return nil }
+                return NSPoint(x: x, y: y)
+            }
             switch parts.first {
             case "hold":
-                // Ignore the real mouse and rest the dock, e.g. for screenshots; "hold off" lets go.
-                self.debugHold = arg != "off"
+                // Ignore the real mouse and rest the dock, e.g. for screenshots; "hold off" lets go. It lets go
+                // by itself after a minute, so a test that stops early can't leave the dock unusable.
+                self.setDebugHold(arg != "off")
                 if self.debugHold { self.view.pointerMoved(nil) }
             case "reveal": self.setRevealed(true)
             case "hide": self.setRevealed(false)
             case "pointer":
                 self.hideWork?.cancel()
-                self.debugHold = Double(arg) != nil
+                self.setDebugHold(Double(arg) != nil)
                 self.view.pointerMoved(Double(arg).map { NSPoint(x: $0, y: self.view.standY + 4) })
             case "press": self.view.debugPress(at: Double(arg).map { CGFloat($0) })
             case "poof": self.view.debugPoof(at: Double(arg).map { CGFloat($0) } ?? 700)
-            case "menu": Double(arg).map { self.view.debugMenu(at: CGFloat($0), seconds: 2) }
+            case "menu":
+                // `menu <x>` for two seconds; `menu <id> [press|sticky]` until closed.
+                if let x = Double(arg) {
+                    self.view.debugMenu(at: CGFloat(x), seconds: 2)
+                } else if !arg.isEmpty {
+                    self.setRevealed(true)
+                    self.view.debugMenu(id: arg, pressed: parts.count > 2 && parts[2] == "press")
+                }
+            case "menu-move": point(1).map { self.view.dockMenu.hover(at: $0) }
+            case "menu-release": point(1).map { self.view.dockMenu.release(at: $0) }
+            case "menu-key" where !arg.isEmpty: self.view.dockMenu.debugKey(arg)
+            case "menu-option": self.view.dockMenu.debugOption(arg == "on")
+            case "menu-choose", "menu-choose-dry":
+                // Titles along the way, separated by "/": `menu-choose Options/Show in Finder`.
+                let path = command.dropFirst(parts[0].count + 1).split(separator: "/").map(String.init)
+                _ = self.view.dockMenu.debugChoose(path, dry: parts[0] == "menu-choose-dry")
+            case "menu-close", "stack-close": self.view.closeMenu()
+            case "stack" where !arg.isEmpty:
+                // `stack <folder name> [fan|grid|list]`, as a click on it would (or as that view).
+                self.setRevealed(true)
+                self.view.debugStack(arg, view: parts.count > 2 ? StackView(rawValue: parts[2]) : nil)
+            case "add-stack" where !arg.isEmpty:
+                // `add-stack <folder path>`, as dropping the folder on the dock does.
+                self.view.model.addStack(folder: URL(fileURLWithPath: String(command.dropFirst(parts[0].count + 1))), at: .max)
+            case "drop" where parts.count > 2:
+                // `drop <x> <path>[|<path>…]`: as dropping those files on the dock at x.
+                let paths = command.dropFirst(parts[0].count + parts[1].count + 2).split(separator: "|").map { URL(fileURLWithPath: String($0)) }
+                Double(arg).map { self.view.debugDrop(paths, x: CGFloat($0)) }
+            case "stack-open" where !arg.isEmpty:
+                self.view.stacks.debugOpenItem(String(command.dropFirst(parts[0].count + 1)))
+            case "dump":
+                // Overwrites oldmacdoc-dump.json in the user's temporary folder with the dock's state.
+                var state = self.view.debugMenuState()
+                state["revealed"] = self.revealed
+                state["ignoresMouseEvents"] = self.panel.ignoresMouseEvents
+                state["hold"] = self.debugHold
+                state["dockWindow"] = self.panel.windowNumber
+                state["stack"] = self.view.debugStackState()
+                let url = FileManager.default.temporaryDirectory.appendingPathComponent("oldmacdoc-dump.json")
+                if let data = try? JSONSerialization.data(withJSONObject: state, options: [.prettyPrinted, .sortedKeys]) {
+                    try? data.write(to: url)
+                }
+            case "click" where !arg.isEmpty: self.view.debugClick(arg)
             case "keep" where parts.count > 2: self.view.model.setPinned(arg, parts[2] == "on")
             case "style": ShelfStyle(rawValue: arg).map { self.settings.settings.shelfStyle = $0 }
             case "finish": FinishLevel(rawValue: arg).map { self.settings.settings.finish = $0 }
@@ -476,6 +529,23 @@ final class DockWindowController {
             }
         }
         observers.append((center, token))
+    }
+
+    private var holdRelease: DispatchWorkItem?
+
+    private func setDebugHold(_ on: Bool) {
+        debugHold = on
+        holdRelease?.cancel()
+        holdRelease = nil
+        guard on else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.debugHold else { return }
+            self.debugHold = false
+            self.view.pointerMoved(nil)
+            self.handleMouse()
+        }
+        holdRelease = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60, execute: work)
     }
     #endif
 }

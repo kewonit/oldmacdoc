@@ -20,11 +20,12 @@ Please include what you found, the steps to reproduce it, the macOS and app vers
 Knowing what the app does helps you judge what counts as a vulnerability.
 
 - **Distribution and updates:** released builds are signed with a Developer ID, use the hardened runtime and are notarized by Apple. Updates go through Sparkle 2 over HTTPS, and each update must carry a valid EdDSA signature matching the public key in the app.
-- **No sandbox, no special permissions:** the app isn't sandboxed, because it has to change Apple's Dock preferences. It doesn't ask for Accessibility, Screen Recording or Full Disk Access.
+- **No sandbox; Accessibility only:** the app isn't sandboxed, because it has to change Apple's Dock preferences. It asks for Accessibility (once, on first launch) and never for Screen Recording or Full Disk Access. With Accessibility it reads the windows of the app whose menu you open (titles and minimized state, to list and raise them), and it opens, reads and closes that app's menu in Apple's parked Dock to show the app's own items and replay the one you choose. It reads nothing else and sends nothing anywhere.
 - **Apple's Dock:** it writes `autohide`, `autohide-delay` and `no-bouncing` in `com.apple.dock`, and, when a side of the main display is free, `orientation`, `tilesize` and `magnification`. It restarts the Dock with `killall Dock`, and keeps the original values in `~/Library/Application Support/OldMacDoc/apple-dock-backup.json`.
 - **Crash recovery:** a detached watchdog (`/bin/sh` with a fixed script, `/dev/null` for stdio and no inherited file descriptors) restores the backup if the app dies.
 - **Window information:** it reads the window list (owners, levels and sizes, never window contents or titles) and receives WindowServer window events through private SkyLight calls. These are read-only.
-- **Files:** it moves files dropped on the Trash to the Trash with `FileManager.trashItem`. It copies images you choose as icons into Application Support and caches rendered icons in `~/Library/Caches/OldMacDoc`.
+- **Badges:** it reads each running app's Dock badge from LaunchServices through private calls, read-only.
+- **Files:** it moves files dropped on the Trash to the Trash with `FileManager.trashItem`. Files dropped on a folder in the dock are moved into it (copied from another disk, or with Option), and never replace anything already there. It lists the folders you put in the dock to show their contents. It copies images you choose as icons into Application Support and caches rendered icons in `~/Library/Caches/OldMacDoc`.
 - **Automation:** only when you choose **Empty Trash…**, it runs `osascript` to ask Finder to empty the Trash. macOS asks for permission the first time.
 - **Network:** the only connections are Sparkle's update checks. There is no telemetry, no analytics and no account.
 

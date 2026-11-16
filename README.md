@@ -12,6 +12,8 @@ The 3D glass Dock, back on your Mac. Free and open source. [oldmacdoc.edbn.me](h
 
 - Clear Glass, Frosted and Smoke shelves, with reflections and lights under open apps.
 - Magnification, auto-hide, drag to rearrange, and one glossy finish for every icon.
+- The original Dock's menus, with the pointer: each app's windows and its own items, Options, Show All Windows, Hide and Quit.
+- Folders as Leopard Stacks (Fan, Grid or List), and the red badges apps put on their icons.
 - Every setting is in a panel under the menu bar icon, and changes show on the dock as you make them.
 
 ## Install
@@ -23,7 +25,7 @@ Needs macOS 14 Sonoma or later, on Apple silicon or Intel.
 
 While OldMacDoc runs, Apple's Dock steps aside. Choose **Quit** in the panel under the menu bar icon and Apple's Dock comes back exactly as it was. It comes back even if OldMacDoc crashes.
 
-OldMacDoc updates itself; it checks once a day. It asks for no permissions.
+OldMacDoc updates itself; it checks once a day. It asks for one permission, Accessibility, so its menus can show each app's windows and its own items; everything else works without it.
 
 ## Build
 

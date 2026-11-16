@@ -23,11 +23,27 @@ final class DockView: NSView, NSDraggingSource {
 
     final class TileElement: NSAccessibilityElement {
         var onPress: (() -> Void)?
+        var onShowMenu: (() -> Void)?
         override func accessibilityPerformPress() -> Bool {
             onPress?()
             return onPress != nil
         }
+        override func accessibilityPerformShowMenu() -> Bool {
+            guard let onShowMenu else { return false }
+            // Not inside the accessibility call: the system menu used with VoiceOver runs until it closes.
+            DispatchQueue.main.async(execute: onShowMenu)
+            return true
+        }
     }
+
+    /// What a menu was opened for.
+    enum MenuSubject {
+        case app(DockModel.Item)
+        case trash
+        case separator
+        case stack(String)
+    }
+    static let separatorID = "::separator"
 
     private final class Tile {
         var item: DockModel.Item?
@@ -37,6 +53,11 @@ final class DockView: NSView, NSDraggingSource {
         /// Darkens the icon (in its own shape) while it's pressed or a drop target.
         let shade = CALayer()
         let shadeMask = CALayer()
+        /// The app's badge (its unread count), over the icon's top right corner.
+        let badge = CALayer()
+        var badgeLabel: String?
+        /// For a folder: what its art was last drawn from (display, sort and first items).
+        var stackKey = ""
         let shadow = CALayer()
         let indicator = CALayer()
         let element = TileElement()
@@ -44,7 +65,11 @@ final class DockView: NSView, NSDraggingSource {
         var requested: IconRequest?
         var frame: CGRect = .zero
         var placed = false
-        var launchObserver: NSKeyValueObservation?
+        /// The process this tile's launch bounce waits for. Only its id is kept: observing an
+        /// NSRunningApplication that quits while it opens (Launchpad does, at once) crashed AppKit.
+        var launchPID: pid_t?
+        /// Which launch the bounce belongs to, so an earlier launch's timeout can't end a later one.
+        var launchToken = 0
         var indicatorKey = ""
         /// What's left of a slide to a new place after a reorder, eased to 0.
         var offset: CGFloat = 0
@@ -79,6 +104,8 @@ final class DockView: NSView, NSDraggingSource {
     private var look = ShelfLook(style: .clear)
     private var paintKey = ""
     private var zebraImage: CGImage?
+    /// Where the separator stands (view coordinates), for its menu.
+    private var separatorX: CGFloat?
     /// The original labels: Lucida Grande 14 on a translucent black pill.
     private let labelFont = NSFont(name: "LucidaGrande", size: 14) ?? NSFont.systemFont(ofSize: 14)
     private var labelSizes: [String: CGSize] = [:]
@@ -119,13 +146,38 @@ final class DockView: NSView, NSDraggingSource {
     private var dropTarget: String?
     private var fileDragActive = false
     private var menuOpen = false
+    /// The tile whose menu is open (it stays darkened), and what the menu was opened for.
+    private var menuTileID: String?
+    private var menuSubject: MenuSubject?
+    /// The system menu shown instead while VoiceOver runs; it tracks the mouse itself until it closes.
+    private var nativeMenuOpen = false
+    /// The windows listed in the open menu, to bring one forward.
+    private var menuWindows: [AppWindows.Window] = []
+    let dockMenu = DockMenuController()
+    let stacks = StackController()
+    /// The folder whose stack is open (Fan or Grid; a List is a menu).
+    private var stackTileID: String?
+    private var stackWatchers: [String: DispatchSourceFileSystemObject] = [:]
+    private var stackRefresh: [String: DispatchWorkItem] = [:]
+    private let badges = BadgeMonitor()
+    let strings = DockStrings.system()
+    private lazy var appleMenus = AppleDockMenus(strings: strings)
+    /// Opens the settings panel (the separator's Dock Settings…).
+    var openSettings: (() -> Void)?
     private var launching: Set<String> = []
+    private var launchCount = 0
+    private var workspaceObservers: [NSObjectProtocol] = []
     private var holdWork: DispatchWorkItem?
     private var labelFade: DispatchWorkItem?
     private var dragFar = false
 
-    /// True while a drag, drop or menu is in progress: the dock must stay up and interactive.
-    var isBusy: Bool { dragID != nil || fileDragActive || menuOpen || pressedID != nil }
+    /// True while a drag, drop or menu is in progress: the dock must stay up.
+    var isBusy: Bool { dragID != nil || fileDragActive || menuOpen || stackTileID != nil || pressedID != nil }
+    /// While these last the dock takes the mouse everywhere. An open menu that isn't following a held
+    /// button needs only the shelf: a click anywhere else goes where it was aimed (and closes the menu).
+    private var capturesPointer: Bool {
+        dragID != nil || fileDragActive || pressedID != nil || nativeMenuOpen || (menuOpen && dockMenu.isTracking)
+    }
 
     // MARK: Metrics
 
@@ -170,12 +222,57 @@ final class DockView: NSView, NSDraggingSource {
         setAccessibilityLabel("Dock")
         applyStyle()
         reload()
+        dockMenu.onChoose = { [weak self] command in self?.run(command) }
+        badges.onChange = { [weak self] in self?.updateBadges() }
+        badges.wanted = { [weak self] in
+            guard let self else { return [:] }
+            var wanted: [String: pid_t] = [:]
+            for t in self.tiles.values {
+                guard let item = t.item, item.isRunning else { continue }
+                let key = BadgeMonitor.key(bundleID: item.bundleID, path: item.url.path)
+                if let pid = self.model.pids[key] { wanted[key] = pid }
+            }
+            return wanted
+        }
+        badges.start()
+        stacks.onClose = { [weak self] in self?.stackClosed() }
+        dockMenu.loadFolder = { [weak self] path in self?.listRows(URL(fileURLWithPath: path)) ?? [] }
+        // Leopard's Downloads stack hopped when a download finished.
+        let downloads = DistributedNotificationCenter.default()
+        workspaceObservers.append(downloads.addObserver(forName: .init("com.apple.DownloadFileFinished"), object: nil, queue: .main) {
+            [weak self] note in
+            guard let path = note.object as? String else { return }
+            self?.downloadFinished(path)
+        })
+        dockMenu.onClose = { [weak self] in self?.menuClosed() }
+        // A launch bounce ends when its app finishes launching, or quits (or crashes) before it does.
+        let ws = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
+            workspaceObservers.append(ws.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+                self?.launchEnded(pid: app.processIdentifier)
+            })
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("not used") }
 
+    deinit {
+        workspaceObservers.forEach {
+            NSWorkspace.shared.notificationCenter.removeObserver($0)
+            DistributedNotificationCenter.default().removeObserver($0)
+        }
+        stackWatchers.values.forEach { $0.cancel() }
+    }
+
     override var isFlipped: Bool { false }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        dockMenu.passThroughWindow = window
+        stacks.passThroughWindow = window
+    }
 
     override func viewDidChangeBackingProperties() {
         super.viewDidChangeBackingProperties()
@@ -258,6 +355,9 @@ final class DockView: NSView, NSDraggingSource {
         t.shade.mask = t.shadeMask
         t.shade.isHidden = true
         t.icon.addSublayer(t.shade)
+        t.badge.contentsGravity = .resize
+        t.badge.isHidden = true
+        t.icon.addSublayer(t.badge)
         t.shadow.contentsGravity = .resize
         t.indicator.opacity = 0
         tileLayer.addSublayer(t.icon)
@@ -270,6 +370,7 @@ final class DockView: NSView, NSDraggingSource {
         t.element.setAccessibilityParent(self)
         t.element.setAccessibilityRole(.button)
         t.element.onPress = { [weak self] in self?.activate(id) }
+        t.element.onShowMenu = { [weak self] in self?.showMenu(for: id, trigger: .keyboard) }
         tiles[id] = t
         return t
     }
@@ -299,9 +400,14 @@ final class DockView: NSView, NSDraggingSource {
                 icons.forget(appURL: item.url)
                 stopBounce(item.id)
             }
+            if item.id == menuTileID, let old = existing?.item, old.isRunning != item.isRunning {
+                // Its menu was for an app that has since opened or quit.
+                DispatchQueue.main.async { [weak self] in self?.closeMenu() }
+            }
             t.item = item
+            t.badgeLabel = badge(for: item)
             t.element.setAccessibilityLabel(item.name)
-            t.element.setAccessibilityValue(item.isRunning ? "running" : nil)
+            t.element.setAccessibilityValue(accessibilityValue(item, badge: t.badgeLabel))
             ids.append(item.id)
         }
         let trashTile = tiles[Self.trashID] ?? makeTile(Self.trashID)
@@ -313,6 +419,7 @@ final class DockView: NSView, NSDraggingSource {
         let previous = order
         for (i, id) in previous.enumerated() where !ids.contains(id) {
             guard let t = tiles[id] else { continue }
+            if id == menuTileID { DispatchQueue.main.async { [weak self] in self?.closeMenu() } }
             if !animate || vanishing.contains(id) || t.presence == 0 {
                 removeTile(id)
                 continue
@@ -327,6 +434,7 @@ final class DockView: NSView, NSDraggingSource {
         vanishing.removeAll()
         for id in tiles.keys where !merged.contains(id) { removeTile(id) }
         order = merged
+        updateStackWatchers()
         refreshIcons(force: false)
         layoutTiles(animated: window != nil)
     }
@@ -356,6 +464,10 @@ final class DockView: NSView, NSDraggingSource {
         for (id, t) in tiles {
             guard let item = t.item else {
                 if t.image == nil { setImage(TrashArt.image(full: trash.isFull), shadow: nil, on: t) }
+                continue
+            }
+            if item.isStack {
+                refreshStackArt(id, force: force)
                 continue
             }
             let key = settings.overrideKey(for: item)
@@ -459,7 +571,8 @@ final class DockView: NSView, NSDraggingSource {
     func layoutTiles(animated: Bool = false) {
         let ids = displayOrder
         guard !ids.isEmpty, bounds.width > 0 else { return }
-        let trashIndex = ids.firstIndex(of: Self.trashID)
+        // The separator stands before the folders and the Trash, as on the original.
+        let trashIndex = ids.firstIndex { tiles[$0]?.item?.isStack == true } ?? ids.firstIndex(of: Self.trashID)
         // Tiles sit about a point apart (icons carry their own padding); the Trash gets a separator gap.
         let spacing = Self.spacing, gapFactor = Self.gapFactor
         tileSize = min(baseSize, largestFittingSize)
@@ -541,7 +654,7 @@ final class DockView: NSView, NSDraggingSource {
         }
         shelfRect = box
         // Magnification moves the tiles under a resting pointer: hover whatever is under it now.
-        if pointerTarget != nil, dragID == nil, !menuOpen, let p = hoverPoint {
+        if pointerTarget != nil, dragID == nil, !menuOpen, stackTileID == nil, let p = hoverPoint {
             hovered = tileID(at: p)
         }
         updateLabel()
@@ -573,8 +686,8 @@ final class DockView: NSView, NSDraggingSource {
     }
 
     #if DEBUG
-    /// Set while the `menu` debug command has a menu open: it closes after this long.
-    private var debugMenuSeconds: TimeInterval?
+    /// Set while the `menu` debug command opens a menu "pressed": as if the button were still down.
+    private var debugMenuPressed = false
     /// Frame pacing for the `stats` debug command: when each frame was drawn, and how long after the
     /// pointer moved. Recorded only once `stats` has been asked for, and cleared at each report.
     private var statsOn = false
@@ -683,6 +796,7 @@ final class DockView: NSView, NSDraggingSource {
 
     /// Stops the display link (the dock is closing).
     func tearDown() {
+        badges.stop()
         link?.invalidate()
         link = nil
     }
@@ -693,9 +807,11 @@ final class DockView: NSView, NSDraggingSource {
             zebra.frame = .zero
             grooveDark.bounds = .zero
             grooveLight.bounds = .zero
+            separatorX = nil
             return
         }
         let x = (row.slots[ti - 1].maxX + row.slots[ti].minX) / 2
+        separatorX = x
         switch look.era {
         case .leopard:
             // An upright image hanging from the back edge, as the original's separator was.
@@ -737,7 +853,17 @@ final class DockView: NSView, NSDraggingSource {
         t.icon.opacity = visible
         t.shade.frame = t.icon.bounds
         t.shadeMask.frame = t.shade.bounds
-        t.shade.isHidden = !(id == pressedID || id == dropTarget)
+        t.shade.isHidden = !(id == pressedID || id == dropTarget || id == menuTileID || id == stackTileID)
+        if let label = t.badgeLabel, let image = BadgeArt.image(label, height: Self.badgePixels) {
+            // About a third of the icon's height, hanging a little past its top right corner.
+            let h = s * 0.36 * CGFloat(image.height) / CGFloat(Self.badgePixels)
+            let w = h * CGFloat(image.width) / CGFloat(image.height)
+            t.badge.contents = image
+            t.badge.frame = CGRect(x: s - w + s * 0.08, y: s - h + s * 0.06, width: w, height: h)
+            t.badge.isHidden = false
+        } else {
+            t.badge.isHidden = true
+        }
         // A 1:1 mirror image hanging from the icon's base (already flipped and faded), clipped at the
         // front line by the reflections layer.
         let depth = ShelfArt.reflectionDepth
@@ -768,9 +894,172 @@ final class DockView: NSView, NSDraggingSource {
         t.element.setAccessibilityFrameInParentSpace(f)
     }
 
+    // MARK: Stacks
+
+    /// Opens a folder's stack above its tile: a Fan or a Grid, or a List (a menu of its items).
+    private func openStack(_ id: String, as requested: StackView? = nil) {
+        guard let window, let t = tiles[id], let item = t.item, let pin = model.stacks.pin(id),
+              let screen = window.screen ?? NSScreen.screens.first else { return }
+        closeMenu()
+        let entries = StackEntry.sorted(StackEntry.contents(of: pin.url), by: pin.sort)
+        let top = window.convertPoint(toScreen: convert(NSPoint(x: t.frame.midX, y: t.frame.maxY), to: nil))
+        let capacity = StackLayout.fanCapacity(height: screen.visibleFrame.maxY - top.y - 8)
+        let view = StackLayout.resolve(requested ?? pin.view, count: entries.count, fanCapacity: capacity)
+        pressedID = nil
+        if view == .list {
+            menuSubject = .stack(id)
+            menuTileID = id
+            menuOpen = true
+            updateLabel()
+            layoutTiles()
+            var rows = listRows(pin.url, sort: pin.sort, entries: entries)
+            rows += [.separator, .item(strings[.openInFinder], .openStackFolder)]
+            dockMenu.open(rows, anchorX: top.x, anchorTop: top.y, screen: screen,
+                          style: MenuStyle.forShelf(settings.settings.shelfStyle), tracking: false)
+            onPointerActivity?()
+            return
+        }
+        stackTileID = id
+        hovered = nil
+        updateLabel()
+        layoutTiles()
+        if view == .grid {
+            stacks.openGrid(folder: pin.url, title: item.name, entries: entries, sort: pin.sort, anchor: top, screen: screen,
+                            strings: strings)
+        } else {
+            stacks.openFan(folder: pin.url, entries: entries, anchor: top, screen: screen, strings: strings)
+        }
+        onPointerActivity?()
+    }
+
+    private func stackClosed() {
+        guard stackTileID != nil else { return }
+        stackTileID = nil
+        hovered = nil
+        layoutTiles()
+        onPointerActivity?()
+    }
+
+    /// A List stack's rows: files open, folders are submenus loaded when they open.
+    private func listRows(_ folder: URL, sort: StackSort? = nil, entries: [StackEntry]? = nil) -> [DockMenuItem] {
+        let order = sort ?? model.stacks.pins.first { folder.path.hasPrefix($0.path) }?.sort ?? .name
+        let shown = entries ?? StackEntry.sorted(StackEntry.contents(of: folder), by: order)
+        guard !shown.isEmpty else { return [.header("No Items")] }
+        return shown.map { entry in
+            var row = DockMenuItem.item(entry.name, .openFile(entry.url.path))
+            row.iconPath = entry.url.path
+            if entry.isFolder { row.folderPath = entry.url.path }
+            return row
+        }
+    }
+
+    /// Draws a folder's tile when what it shows has changed: its first items (as a stack) or its icon.
+    private func refreshStackArt(_ id: String, force: Bool) {
+        guard let t = tiles[id], let pin = model.stacks.pin(id) else { return }
+        let entries = pin.display == .stack ? Array(StackEntry.sorted(StackEntry.contents(of: pin.url), by: pin.sort).prefix(3)) : []
+        let key = "\(pin.display)-\(pin.sort)-" + entries.map(\.url.path).joined(separator: "|")
+        guard force || key != t.stackKey || t.image == nil else { return }
+        t.stackKey = key
+        setImage(StackArt.image(folder: pin.url, entries: entries, display: pin.display), shadow: nil, on: t, fade: t.image != nil)
+    }
+
+    /// Watches each folder in the dock, so its tile follows what's added to it.
+    private func updateStackWatchers() {
+        let ids = Set(tiles.values.compactMap { $0.item?.stackID })
+        for (id, source) in stackWatchers where !ids.contains(id) {
+            source.cancel()
+            stackWatchers[id] = nil
+        }
+        for id in ids where stackWatchers[id] == nil {
+            guard let pin = model.stacks.pin(id) else { continue }
+            let fd = Darwin.open(pin.path, O_EVTONLY)
+            guard fd >= 0 else { continue }
+            let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: [.write, .rename, .delete], queue: .main)
+            source.setEventHandler { [weak self] in
+                // A burst of changes (a download, a copy) redraws once it settles.
+                self?.stackRefresh[id]?.cancel()
+                let work = DispatchWorkItem { [weak self] in self?.refreshStackArt(id, force: false) }
+                self?.stackRefresh[id] = work
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+            }
+            source.setCancelHandler { Darwin.close(fd) }
+            source.resume()
+            stackWatchers[id] = source
+        }
+    }
+
+    /// A finished download lands in a folder in the dock: that stack hops once.
+    private func downloadFinished(_ path: String) {
+        let folder = URL(fileURLWithPath: path).deletingLastPathComponent().standardizedFileURL.path
+        guard let id = model.stacks.pins.first(where: { $0.path == folder })?.id, let t = tiles[id], !reduceMotion else { return }
+        refreshStackArt(id, force: false)
+        let hop = CAKeyframeAnimation(keyPath: "transform.translation.y")
+        hop.values = [0, t.frame.height * 0.45, 0]
+        hop.keyTimes = [0, 0.5, 1]
+        hop.timingFunctions = [CAMediaTimingFunction(controlPoints: 0.25, 0.46, 0.45, 0.94),
+                               CAMediaTimingFunction(controlPoints: 0.55, 0.085, 0.68, 0.53)]
+        hop.duration = 0.5
+        t.icon.add(hop, forKey: "hop")
+    }
+
+    static func isFolder(_ url: URL) -> Bool {
+        let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
+        return values?.isDirectory == true && values?.isPackage != true
+    }
+
+    /// Files dropped on a folder go into it (off the main thread); a name already there beeps.
+    static func file(_ urls: [URL], into folder: URL, copy: Bool) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let failed = StackFiling.file(urls, into: folder, copy: copy).contains { !$0.value }
+            if failed { DispatchQueue.main.async { NSSound.beep() } }
+        }
+    }
+
+    #if DEBUG
+    /// Debug hook: open the stack named `name` (its folder's name) as a Fan, Grid or List.
+    func debugStack(_ name: String, view: StackView?) {
+        guard let id = tiles.first(where: { $0.value.item?.isStack == true && $0.value.item?.name == name })?.key else { return }
+        openStack(id, as: view)
+    }
+
+    func debugStackState() -> [String: Any] { stacks.debugState() }
+
+    /// Debug hook: the same as dropping `urls` on the dock at `x` (at icon height).
+    func debugDrop(_ urls: [URL], x: CGFloat) {
+        _ = drop(urls, at: NSPoint(x: x, y: standY + tileSize / 2))
+    }
+    #endif
+
+    // MARK: Badges
+
+    /// Badges are drawn once per label at this height in pixels and scaled with the icon.
+    private static let badgePixels = 96
+
+    private func badge(for item: DockModel.Item) -> String? {
+        item.isRunning ? badges.labels[BadgeMonitor.key(bundleID: item.bundleID, path: item.url.path)] : nil
+    }
+
+    private func accessibilityValue(_ item: DockModel.Item, badge: String?) -> String? {
+        var parts: [String] = []
+        if item.isRunning { parts.append("running") }
+        if let badge { parts.append(badge.isEmpty ? "badge" : "badge \(badge)") }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    private func updateBadges() {
+        for t in tiles.values {
+            guard let item = t.item else { continue }
+            let label = badge(for: item)
+            guard label != t.badgeLabel else { continue }
+            t.badgeLabel = label
+            t.element.setAccessibilityValue(accessibilityValue(item, badge: label))
+        }
+        layoutTiles()
+    }
+
     private func updateLabel() {
-        guard let id = hovered, dragID == nil, !menuOpen, let t = tiles[id] else {
-            hideLabel(linger: dragID == nil && !menuOpen)
+        guard let id = hovered, dragID == nil, !menuOpen, stackTileID == nil, let t = tiles[id] else {
+            hideLabel(linger: dragID == nil && !menuOpen && stackTileID == nil)
             return
         }
         labelFade?.cancel()
@@ -832,7 +1121,7 @@ final class DockView: NSView, NSDraggingSource {
 
     /// The area that should receive mouse events (grows while magnified).
     func isInteractive(_ p: NSPoint) -> Bool {
-        if isBusy { return true }
+        if capturesPointer { return true }
         guard isShown else { return false }
         guard p.x >= shelfRect.minX, p.x <= shelfRect.maxX, p.y >= 0 else { return false }
         let magnified = pointerTarget != nil || magnify > 0.01
@@ -842,7 +1131,7 @@ final class DockView: NSView, NSDraggingSource {
 
     /// Hover position from the window controller (nil when the pointer is away).
     func pointerMoved(_ p: NSPoint?) {
-        guard dragID == nil, !menuOpen else { return }
+        guard dragID == nil, !menuOpen, stackTileID == nil else { return }
         let newHover = p.flatMap { tileID(at: $0) }
         if p?.x == pointerTarget, newHover == hovered { return }
         pointerTarget = p?.x
@@ -874,9 +1163,37 @@ final class DockView: NSView, NSDraggingSource {
 
     /// Debug hook: open the menu of the tile at `x`, and close it again after `seconds`.
     func debugMenu(at x: CGFloat, seconds: TimeInterval) {
-        debugMenuSeconds = seconds
-        defer { debugMenuSeconds = nil }
-        showMenu(at: NSPoint(x: x, y: standY + 4))
+        showMenu(at: NSPoint(x: x, y: standY + 4), trigger: .keyboard)
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in self?.closeMenu() }
+    }
+
+    /// Debug hook: open the menu of the tile with this id (`::separator` for the separator), as a
+    /// right-click would (`press`: the button stays down until `menu-release`) or left open (`sticky`).
+    func debugMenu(id: String, pressed: Bool) {
+        debugMenuPressed = pressed
+        defer { debugMenuPressed = false }
+        showMenu(for: id, trigger: pressed ? .rightClick : .keyboard)
+    }
+
+    /// Debug hook: a description of the dock's menu state, for the `dump` command.
+    func debugMenuState() -> [String: Any] {
+        var state = dockMenu.debugState()
+        state["menuTile"] = menuTileID as Any
+        state["busy"] = isBusy
+        state["capturesPointer"] = capturesPointer
+        state["shown"] = isShown
+        state["separatorX"] = separatorX as Any
+        state["tiles"] = displayOrder.compactMap { id -> [String: Any]? in
+            guard let t = tiles[id] else { return nil }
+            return ["id": id, "x": t.frame.midX, "running": t.item?.isRunning ?? false, "name": t.item?.name ?? "Trash",
+                    "art": t.stackKey, "badge": t.badgeLabel as Any]
+        }
+        return state
+    }
+
+    /// Debug hook: click the tile with this id (a bundle id, or `::trash`), as a plain click would.
+    func debugClick(_ id: String) {
+        activate(id)
     }
 
     /// Debug hook: play the removal puff above the shelf at `x`.
@@ -890,7 +1207,13 @@ final class DockView: NSView, NSDraggingSource {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if event.modifierFlags.contains(.control) { showMenu(at: p); return }
+        if dockMenu.isOpen || stacks.isOpen {
+            // A click on the dock while a menu or stack is open closes it, and does nothing else, as with any menu.
+            closeMenu()
+            if event.modifierFlags.contains(.control) { showMenu(at: p, trigger: .controlClick) }
+            return
+        }
+        if event.modifierFlags.contains(.control) { showMenu(at: p, trigger: .controlClick); return }
         pressedID = tileID(at: p)
         pressPoint = p
         layoutTiles()
@@ -899,7 +1222,8 @@ final class DockView: NSView, NSDraggingSource {
         if let id = pressedID {
             let work = DispatchWorkItem { [weak self] in
                 guard let self, self.pressedID == id, self.dragID == nil else { return }
-                self.showMenu(at: p)
+                // The icon that was pressed, wherever it is now (the row may have moved meanwhile).
+                self.showMenu(for: id, trigger: .hold)
             }
             holdWork = work
             DispatchQueue.main.asyncAfter(deadline: .now() + AutoHide.holdForMenu, execute: work)
@@ -907,6 +1231,11 @@ final class DockView: NSView, NSDraggingSource {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if dockMenu.isOpen, dockMenu.isTracking {
+            // The menu opened under a held button (click and hold, Control-click): it follows the drag.
+            dockMenu.hover(at: screenPoint(event))
+            return
+        }
         let p = convert(event.locationInWindow, from: nil)
         guard let id = pressedID, dragID == nil, id != Self.trashID, model.canMove(id),
               hypot(p.x - pressPoint.x, p.y - pressPoint.y) > 6 else { return }
@@ -914,14 +1243,35 @@ final class DockView: NSView, NSDraggingSource {
         beginDrag(id, event: event)
     }
 
+    override func rightMouseDragged(with event: NSEvent) {
+        if dockMenu.isOpen, dockMenu.isTracking { dockMenu.hover(at: screenPoint(event)) }
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        if dockMenu.isOpen, dockMenu.isTracking { dockMenu.release(at: screenPoint(event)) }
+    }
+
+    private func screenPoint(_ event: NSEvent) -> NSPoint {
+        window?.convertPoint(toScreen: event.locationInWindow) ?? NSEvent.mouseLocation
+    }
+
     override func mouseUp(with event: NSEvent) {
         holdWork?.cancel()
+        if dockMenu.isOpen, dockMenu.isTracking {
+            dockMenu.release(at: screenPoint(event))
+            return
+        }
         guard let id = pressedID else { return }
         pressedID = nil
         layoutTiles()
         guard dragID == nil, tileID(at: convert(event.locationInWindow, from: nil)) == id else { return }
         let flags = event.modifierFlags.intersection([.command, .option])
         guard let item = tiles[id]?.item else { activate(id); return }
+        if item.isStack {
+            // A folder: Command shows it in Finder; any other click opens it (no apps are hidden).
+            if flags == .command { NSWorkspace.shared.activateFileViewerSelecting([item.url]) } else { openStack(id) }
+            return
+        }
         switch flags {
         case .command:
             NSWorkspace.shared.activateFileViewerSelecting([item.url])
@@ -944,14 +1294,19 @@ final class DockView: NSView, NSDraggingSource {
     }
 
     override func rightMouseDown(with event: NSEvent) {
-        showMenu(at: convert(event.locationInWindow, from: nil))
+        // Right-clicking again (on this icon or another) opens that icon's menu afresh.
+        closeMenu()
+        showMenu(at: convert(event.locationInWindow, from: nil), trigger: .rightClick)
     }
 
     private func activate(_ id: String) {
         if id == Self.trashID { trash.open(); return }
+        if tiles[id]?.item?.isStack == true { openStack(id); return }
         guard let item = tiles[id]?.item, !launching.contains(id) else { return }
         if !item.isRunning {
-            startBounce(id)
+            // Apps that never take a place in the Dock (Launchpad, Mission Control) open without a
+            // bounce, as in Apple's Dock: they'd never show as running to end it.
+            if AppBundleInfo.showsInDock(Bundle(url: item.url)?.infoDictionary) { startBounce(id) }
         } else if let app = model.runningApplication(for: item) {
             // Bring it forward straight away, with all its windows, as the Dock does. The open below
             // still sends the "reopen" that brings minimized windows back; it goes through
@@ -963,24 +1318,36 @@ final class DockView: NSView, NSDraggingSource {
         // For a running app this sends the same "reopen" Apple's Dock does, so minimized windows come back.
         NSWorkspace.shared.openApplication(at: item.url, configuration: config) { [weak self] app, error in
             DispatchQueue.main.async {
-                guard let self else { return }
+                guard let self, self.launching.contains(id) || error != nil else { return }
                 if error != nil {
                     self.stopBounce(id)
                     NSSound.beep()
-                } else if let app, self.launching.contains(id) {
-                    self.tiles[id]?.launchObserver = app.observe(\.isFinishedLaunching, options: [.initial, .new]) { app, _ in
-                        guard app.isFinishedLaunching else { return }
-                        DispatchQueue.main.async { self.stopBounce(id) }
-                    }
+                } else if let app, !app.isTerminated, !app.isFinishedLaunching {
+                    // Still opening: the workspace notifications end the bounce (see `launchEnded`).
+                    self.tiles[id]?.launchPID = app.processIdentifier
+                } else {
+                    // Already open, or already gone (an app that quits as soon as it opens).
+                    self.stopBounce(id)
                 }
             }
         }
     }
 
+    /// The app with this process id finished launching, or quit before it did.
+    private func launchEnded(pid: pid_t) {
+        for (id, t) in tiles where t.launchPID == pid { stopBounce(id) }
+    }
+
     private func startBounce(_ id: String) {
         guard let t = tiles[id] else { return }
         launching.insert(id)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in self?.stopBounce(id) }
+        launchCount += 1
+        let token = launchCount
+        t.launchToken = token
+        DispatchQueue.main.asyncAfter(deadline: .now() + 15) { [weak self] in
+            guard let self, self.tiles[id]?.launchToken == token else { return }
+            self.stopBounce(id)
+        }
         guard !reduceMotion else { return }
         let bounce = CAKeyframeAnimation(keyPath: "transform.translation.y")
         bounce.values = [0, t.frame.height * 0.6, 0]
@@ -995,7 +1362,7 @@ final class DockView: NSView, NSDraggingSource {
 
     private func stopBounce(_ id: String) {
         guard launching.remove(id) != nil, let t = tiles[id] else { return }
-        t.launchObserver = nil
+        t.launchPID = nil
         // Let the current hop finish instead of snapping down mid-air.
         guard let bounce = t.icon.animation(forKey: "bounce") else { return }
         let elapsed = t.icon.convertTime(CACurrentMediaTime(), from: nil) - bounce.beginTime
@@ -1064,8 +1431,11 @@ final class DockView: NSView, NSDraggingSource {
             slot = hit
         }
         var ids = current.filter { $0 != id }
-        let pinnedCount = ids.filter { tiles[$0]?.item?.isPinned ?? false }.count
-        ids.insert(id, at: min(max(slot, 1), pinnedCount))
+        // Apps stay among the kept apps, folders among the folders.
+        let isStack = { (other: String) in self.tiles[other]?.item?.isStack ?? false }
+        let kept = ids.filter { !isStack($0) && (tiles[$0]?.item?.isPinned ?? false) }.count
+        let apps = ids.filter { !isStack($0) }.count
+        ids.insert(id, at: DockSections.clamp(slot, isStack: isStack(id), keptApps: kept, apps: apps, stacks: ids.count - apps))
         ids.append(Self.trashID)
         pointerTarget = p.x
         pointerX = p.x
@@ -1091,7 +1461,12 @@ final class DockView: NSView, NSDraggingSource {
             vanishing.insert(id) // already out of the row: it goes with the puff, it doesn't shrink
             model.setPinned(id, false)
         } else {
-            if let final, let index = final.firstIndex(of: id) { model.place(id, at: index) }
+            if item?.isStack == true {
+                let folders = (final ?? order).filter { tiles[$0]?.item?.isStack == true }
+                if let index = folders.firstIndex(of: id) { model.moveStack(id, to: index) }
+            } else if let final, let index = final.firstIndex(of: id) {
+                model.place(id, at: index)
+            }
             // A running app dragged off stays until it quits.
             if releasedFar, item?.isRunning == true, item?.isPinned == true, model.canRemove(id) { model.setPinned(id, false) }
         }
@@ -1123,9 +1498,14 @@ final class DockView: NSView, NSDraggingSource {
         var op: NSDragOperation = []
         if target == Self.trashID {
             op = .generic
-        } else if let target, tiles[target]?.item != nil {
-            op = NSEvent.modifierFlags.contains(.option) && urls.count == 1 && isImage(urls[0]) ? .copy : .generic
-        } else if urls.allSatisfy({ $0.pathExtension == "app" }) {
+        } else if let target, let item = tiles[target]?.item {
+            if item.isStack {
+                // Into the folder: moved, or copied with Option, from another disk, or when the source only lends a copy.
+                op = Self.folderDropOperation(sender.draggingSourceOperationMask)
+            } else {
+                op = NSEvent.modifierFlags.contains(.option) && urls.count == 1 && isImage(urls[0]) ? .copy : .generic
+            }
+        } else if urls.allSatisfy({ $0.pathExtension == "app" || Self.isFolder($0) }) {
             op = .copy
         }
         let newTarget = op.isEmpty ? nil : target
@@ -1154,8 +1534,19 @@ final class DockView: NSView, NSDraggingSource {
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         if isOwnDrag(sender) { return true }
         defer { endFileDrag() }
-        let p = convert(sender.draggingLocation, from: nil)
-        let urls = fileURLs(sender)
+        return drop(fileURLs(sender), at: convert(sender.draggingLocation, from: nil), allowed: sender.draggingSourceOperationMask)
+    }
+
+    /// What dropping on a folder does: move when the source allows it and Option isn't held, else copy.
+    private static func folderDropOperation(_ allowed: NSDragOperation) -> NSDragOperation {
+        if allowed.contains(.move), !NSEvent.modifierFlags.contains(.option) { return .move }
+        if allowed.contains(.copy) { return .copy }
+        return allowed.contains(.generic) ? .move : []
+    }
+
+    /// Files dropped at `p`: into the Trash, onto an app (opened with it) or a folder (filed into it), or
+    /// between icons (apps and folders join the dock).
+    private func drop(_ urls: [URL], at p: NSPoint, allowed: NSDragOperation = [.copy, .move]) -> Bool {
         guard !urls.isEmpty else { return false }
         let target = tileID(at: p)
         if target == Self.trashID {
@@ -1163,6 +1554,12 @@ final class DockView: NSView, NSDraggingSource {
             return true
         }
         if let target, let item = tiles[target]?.item {
+            if item.isStack {
+                let operation = Self.folderDropOperation(allowed)
+                guard !operation.isEmpty else { return false }
+                Self.file(urls, into: item.url, copy: operation == .copy)
+                return true
+            }
             if NSEvent.modifierFlags.contains(.option), urls.count == 1, isImage(urls[0]) {
                 setCustomIcon(urls[0], for: item)
             } else {
@@ -1171,7 +1568,15 @@ final class DockView: NSView, NSDraggingSource {
             return true
         }
         let apps = urls.filter { $0.pathExtension == "app" }
-        guard !apps.isEmpty else { return false }
+        let folders = urls.filter { $0.pathExtension != "app" && Self.isFolder($0) }
+        guard !apps.isEmpty || !folders.isEmpty else { return false }
+        // Folders join the folders, nearest where they were dropped.
+        let shownStacks = order.filter { tiles[$0]?.item?.isStack == true && !(tiles[$0]?.leaving ?? true) }
+        var stackIndex = shownStacks.firstIndex { p.x < (tiles[$0]?.frame.midX ?? 0) } ?? shownStacks.count
+        for folder in folders {
+            model.addStack(folder: folder, at: stackIndex)
+            stackIndex += 1
+        }
         let present = order.filter { !(tiles[$0]?.leaving ?? true) }
         var index = present.firstIndex { p.x < (tiles[$0]?.frame.midX ?? 0) } ?? present.count
         for app in apps {
@@ -1183,95 +1588,196 @@ final class DockView: NSView, NSDraggingSource {
 
     // MARK: Context menu
 
-    private func showMenu(at p: NSPoint) {
-        guard let id = tileID(at: p), let t = tiles[id] else { return }
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        @discardableResult
-        func add(_ title: String, _ action: Selector, enabled: Bool = true, on: Bool = false, to m: NSMenu? = nil) -> NSMenuItem {
-            let item = (m ?? menu).addItem(withTitle: title, action: action, keyEquivalent: "")
-            item.target = self
-            item.representedObject = id
-            item.isEnabled = enabled
-            item.state = on ? .on : .off
-            return item
+    /// Opens the menu for what's at `p`: an icon, or the separator.
+    private func showMenu(at p: NSPoint, trigger: MenuTracking.Trigger) {
+        if let id = tileID(at: p) {
+            showMenu(for: id, trigger: trigger)
+        } else if let x = separatorX, abs(p.x - x) <= max(8, tileSize * Self.gapFactor / 2), p.y >= 0, p.y <= standY + tileSize {
+            showMenu(for: Self.separatorID, trigger: trigger)
         }
-        if let item = t.item {
-            add("Open", #selector(menuOpen(_:)))
-            if item.isRunning, let app = model.runningApplication(for: item) {
-                add(app.isHidden ? "Show" : "Hide", #selector(menuToggleHidden(_:)))
-            }
-            menu.addItem(.separator())
-            add("Keep in Dock", #selector(menuToggleKeep(_:)), enabled: model.canRemove(id), on: item.keepsInDock)
-            add("Show in Finder", #selector(menuShowInFinder(_:)))
-            let iconMenu = NSMenu()
-            let mode = settings.settings.overrides[settings.overrideKey(for: item)]?.mode ?? .retro
-            add("Retro Finish", #selector(menuRetro(_:)), on: mode == .retro, to: iconMenu)
-            add("Original", #selector(menuOriginal(_:)), on: mode == .original, to: iconMenu)
-            iconMenu.addItem(.separator())
-            add("Choose Image…", #selector(menuChooseImage(_:)), to: iconMenu)
-            add("Reset", #selector(menuResetIcon(_:)), enabled: settings.settings.overrides[settings.overrideKey(for: item)] != nil, to: iconMenu)
-            menu.addItem(withTitle: "Icon", action: nil, keyEquivalent: "").submenu = iconMenu
-            if item.isRunning, id != DockModel.finderID {
-                menu.addItem(.separator())
-                add("Quit", #selector(menuQuit(_:)))
-                let force = add("Force Quit", #selector(menuForceQuit(_:)))
-                force.isAlternate = true
-                force.keyEquivalentModifierMask = .option
-            }
+    }
+
+    /// Opens the menu of the tile `id` (or the separator) above it, pointing at it.
+    func showMenu(for id: String, trigger: MenuTracking.Trigger) {
+        guard let window, !nativeMenuOpen else { return }
+        let subject: MenuSubject
+        let anchor: CGRect
+        if id == Self.separatorID {
+            guard let x = separatorX else { return }
+            subject = .separator
+            anchor = CGRect(x: x, y: standY, width: 0, height: tileSize)
         } else {
-            add("Open", #selector(menuOpen(_:)))
-            menu.addItem(.separator())
-            add("Empty Trash…", #selector(menuEmptyTrash(_:)), enabled: trash.isFull)
+            guard let t = tiles[id], !t.leaving else { return }
+            anchor = t.frame
+            subject = t.item.map { $0.isStack ? MenuSubject.stack($0.id) : .app($0) } ?? .trash
         }
-        menuOpen = true
+        guard let screen = window.screen ?? NSScreen.screens.first else { return }
+        closeMenu()
+        holdWork?.cancel()
         pressedID = nil
+        menuSubject = subject
+        let items = menuItems(for: subject)
+        guard !items.isEmpty else { return }
+        menuTileID = id == Self.separatorID ? nil : id
+        menuOpen = true
         updateLabel()
-        // Above the icon and centred on it, as the Dock's own menus open (not at the pointer, where it
-        // would cover the icons). AppKit keeps it on screen.
-        let size = menu.size
-        #if DEBUG
-        if let seconds = debugMenuSeconds {
-            let close = Timer(timeInterval: seconds, repeats: false) { _ in menu.cancelTracking() }
-            RunLoop.main.add(close, forMode: .common)
+        layoutTiles()
+        if NSWorkspace.shared.isVoiceOverEnabled {
+            showNativeMenu(items, anchor: anchor)
+            return
         }
+        let top = window.convertPoint(toScreen: convert(NSPoint(x: anchor.midX, y: anchor.maxY), to: nil))
+        var tracking = trigger != .keyboard && NSEvent.pressedMouseButtons != 0
+        #if DEBUG
+        if debugMenuPressed { tracking = true }
         #endif
-        menu.popUp(positioning: nil, at: NSPoint(x: t.frame.midX - size.width / 2, y: t.frame.maxY + 8 + size.height), in: self)
-        menuOpen = false
+        dockMenu.open(items, anchorX: top.x, anchorTop: top.y, screen: screen,
+                  style: MenuStyle.forShelf(settings.settings.shelfStyle), tracking: tracking)
         onPointerActivity?()
     }
 
-    private func menuItem(_ sender: NSMenuItem) -> DockModel.Item? {
-        (sender.representedObject as? String).flatMap { tiles[$0]?.item }
+    /// With VoiceOver, the same menu as a system menu, which VoiceOver reads and drives.
+    private func showNativeMenu(_ items: [DockMenuItem], anchor: CGRect) {
+        let native = NativeMenu { [weak self] in self?.run($0) }
+        let nsMenu = native.make(items)
+        nativeMenuOpen = true
+        onPointerActivity?()
+        let size = nsMenu.size
+        nsMenu.popUp(positioning: nil, at: NSPoint(x: anchor.midX - size.width / 2, y: anchor.maxY + 8 + size.height), in: self)
+        withExtendedLifetime(native) {}
+        nativeMenuOpen = false
+        menuClosed()
     }
 
-    @objc private func menuOpen(_ sender: NSMenuItem) {
-        if let id = sender.representedObject as? String { activate(id) }
+    /// Closes the menu, if one is open. The window controller calls this when the dock steps aside or hides.
+    func closeMenu() {
+        if dockMenu.isOpen { dockMenu.close() }
+        if stacks.isOpen { stacks.close() }
     }
 
-    @objc private func menuToggleHidden(_ sender: NSMenuItem) {
-        guard let item = menuItem(sender), let app = model.runningApplication(for: item) else { return }
-        _ = app.isHidden ? app.unhide() : app.hide()
+    private func menuClosed() {
+        guard menuOpen else { return }
+        menuOpen = false
+        menuTileID = nil
+        // Hover and the label come back where the pointer is now, without waiting for it to move.
+        hovered = nil
+        layoutTiles()
+        onPointerActivity?()
     }
 
-    @objc private func menuToggleKeep(_ sender: NSMenuItem) {
-        guard let item = menuItem(sender) else { return }
-        model.setPinned(item.id, !item.keepsInDock)
+    private func menuItems(for subject: MenuSubject) -> [DockMenuItem] {
+        switch subject {
+        case .app(let item): return appMenuItems(item)
+        case .trash: return DockMenuBuilder.trash(isFull: trash.isFull, strings: strings)
+        case .separator:
+            return DockMenuBuilder.separator(autoHide: settings.settings.autoHide, magnification: settings.settings.magnification,
+                                             strings: strings)
+        case .stack(let id): return stackMenuItems(id)
+        }
     }
 
-    @objc private func menuShowInFinder(_ sender: NSMenuItem) {
-        if let item = menuItem(sender) { NSWorkspace.shared.activateFileViewerSelecting([item.url]) }
+    /// An app's menu: its windows (read from the app now), its own items, recent documents, Open at Login
+    /// and Assign To (from Apple's Dock, remembered per app), and the rest, which OldMacDoc does itself.
+    private func appMenuItems(_ item: DockModel.Item) -> [DockMenuItem] {
+        let app = item.isRunning ? model.runningApplication(for: item) : nil
+        var state = AppMenuState()
+        state.isRunning = app != nil
+        state.isFinder = item.id == DockModel.finderID
+        state.isHidden = app?.isHidden ?? false
+        state.keepsInDock = item.keepsInDock
+        let key = settings.overrideKey(for: item)
+        state.iconMode = settings.settings.overrides[key]?.mode ?? .retro
+        state.hasIconOverride = settings.settings.overrides[key] != nil
+        menuWindows = []
+        var slow = false
+        if let app {
+            if let windows = AppWindows.read(pid: app.processIdentifier, appName: item.name) {
+                menuWindows = windows
+                state.windows = windows.map(\.info)
+            } else {
+                // Slow to answer isn't the same as hung (an app indexing, or napping): Apple's Dock decides that,
+                // so its menu is read afresh, and only its word puts up Not Responding and Force Quit.
+                slow = true
+            }
+        }
+        if let snapshot = appleMenus.snapshot(for: item, pid: app?.processIdentifier, windowTitles: Set(state.windows.map(\.title)),
+                                              fresh: slow) {
+            state.notResponding = slow && snapshot.notResponding
+            state.appleGroups = snapshot.groups
+            state.openAtLogin = snapshot.openAtLogin
+            if let path = snapshot.openAtLoginPath { state.openAtLoginCommand = .apple(path) }
+            state.assignTo = snapshot.assignTo
+            state.canShowAllWindows = app != nil && snapshot.canShowAllWindows
+        }
+        return DockMenuBuilder.app(state, strings: strings)
     }
 
-    @objc private func menuQuit(_ sender: NSMenuItem) {
-        if let item = menuItem(sender) { model.runningApplication(for: item)?.terminate() }
+    private func run(_ command: DockCommand) {
+        guard let subject = menuSubject else { return }
+        switch subject {
+        case .app(let item):
+            // The app as it is now: it may have opened or quit since its menu opened.
+            runApp(command, tiles[item.id]?.item ?? item)
+        case .trash:
+            if command == .openTrash { trash.open() } else if command == .emptyTrash { trash.empty() }
+        case .separator:
+            switch command {
+            case .toggleAutoHide: settings.settings.autoHide.toggle()
+            case .toggleMagnification: settings.settings.magnification.toggle()
+            case .dockSettings: openSettings?()
+            default: break
+            }
+        case .stack(let id): runStack(command, id)
+        }
     }
 
-    @objc private func menuForceQuit(_ sender: NSMenuItem) {
-        if let item = menuItem(sender) { model.runningApplication(for: item)?.forceTerminate() }
+    private func runApp(_ command: DockCommand, _ item: DockModel.Item) {
+        let app = model.runningApplication(for: item)
+        switch command {
+        case .open: activate(item.id)
+        case .hide: app?.hide()
+        case .unhide: app?.unhide()
+        case .hideOthers:
+            for other in NSWorkspace.shared.runningApplications where other.activationPolicy == .regular && other != app
+                && other.processIdentifier != ProcessInfo.processInfo.processIdentifier {
+                other.hide()
+            }
+            app?.unhide()
+            app?.activate(options: [])
+        case .quit: app?.terminate()
+        case .forceQuit: app?.forceTerminate()
+        case .relaunch: relaunch(app, url: item.url)
+        case .toggleKeepInDock: model.setPinned(item.id, !item.keepsInDock)
+        case .showInFinder: NSWorkspace.shared.activateFileViewerSelecting([item.url])
+        case .showAllWindows: appleMenus.showAllWindows(for: item)
+        case .focusWindow(let i):
+            if let app, i < menuWindows.count { AppWindows.focus(menuWindows[i].element, of: app) }
+        case .apple(let path):
+            if !appleMenus.press(path, for: item) { NSSound.beep() }
+        case .iconMode(let mode): updateOverride(item) { $0.mode = mode }
+        case .chooseIconImage: chooseImage(for: item)
+        case .resetIcon: resetIcon(for: item)
+        case .newFinderWindow:
+            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: FileManager.default.homeDirectoryForCurrentUser.path)
+        case .findInFinder: NSWorkspace.shared.showSearchResults(forQueryString: "")
+        case .openFile(let path): NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        default: break
+        }
     }
 
-    @objc private func menuEmptyTrash(_ sender: NSMenuItem) { trash.empty() }
+    /// Quits Finder and opens it again (Finder's menu offers this with Option, instead of Quit).
+    private func relaunch(_ app: NSRunningApplication?, url: URL) {
+        guard let app else { return }
+        app.terminate()
+        var ticks = 0
+        Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+            ticks += 1
+            if ticks == 30, !app.isTerminated { app.forceTerminate() }
+            guard app.isTerminated || ticks > 60 else { return }
+            timer.invalidate()
+            NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+        }
+    }
 
     private func updateOverride(_ item: DockModel.Item, _ change: (inout IconOverride) -> Void) {
         let key = settings.overrideKey(for: item)
@@ -1280,16 +1786,7 @@ final class DockView: NSView, NSDraggingSource {
         settings.settings.overrides[key] = o
     }
 
-    @objc private func menuRetro(_ sender: NSMenuItem) {
-        if let item = menuItem(sender) { updateOverride(item) { $0.mode = .retro } }
-    }
-
-    @objc private func menuOriginal(_ sender: NSMenuItem) {
-        if let item = menuItem(sender) { updateOverride(item) { $0.mode = .original } }
-    }
-
-    @objc private func menuChooseImage(_ sender: NSMenuItem) {
-        guard let item = menuItem(sender) else { return }
+    private func chooseImage(for item: DockModel.Item) {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
         panel.message = "Choose an image for \(item.name)"
@@ -1297,8 +1794,27 @@ final class DockView: NSView, NSDraggingSource {
         if panel.runModal() == .OK, let url = panel.url { setCustomIcon(url, for: item) }
     }
 
-    @objc private func menuResetIcon(_ sender: NSMenuItem) {
-        guard let item = menuItem(sender) else { return }
+    private func stackMenuItems(_ id: String) -> [DockMenuItem] {
+        guard let pin = model.stacks.pin(id) else { return [] }
+        return DockMenuBuilder.stack(name: pin.name, sort: pin.sort, display: pin.display, view: pin.view, strings: strings)
+    }
+
+    private func runStack(_ command: DockCommand, _ id: String) {
+        guard let pin = model.stacks.pin(id) else { return }
+        switch command {
+        case .stackSort(let sort): model.updateStack(id) { $0.sort = sort }
+        case .stackDisplay(let display): model.updateStack(id) { $0.display = display }
+        case .stackView(let view): model.updateStack(id) { $0.view = view }
+        case .removeStack: model.setPinned(id, false)
+        case .showInFinder: NSWorkspace.shared.activateFileViewerSelecting([pin.url])
+        case .openStackFolder: NSWorkspace.shared.open(pin.url)
+        case .openFile(let path): NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        default: break
+        }
+        refreshStackArt(id, force: true)
+    }
+
+    private func resetIcon(for item: DockModel.Item) {
         let key = settings.overrideKey(for: item)
         if let name = settings.settings.overrides[key]?.customImage {
             try? FileManager.default.removeItem(at: Paths.customIcons.appendingPathComponent(name))

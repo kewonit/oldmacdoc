@@ -103,7 +103,12 @@ final class SettingsPanelController: NSObject {
                 self?.close()
                 SMAppService.openSystemSettingsLoginItems()
             },
-            magnifying: { [weak self] in self?.demoMagnification($0) })
+            magnifying: { [weak self] in self?.demoMagnification($0) },
+            openAccessibility: { [weak self] in
+                self?.close()
+                AccessibilityAccess.ask()
+                AccessibilityAccess.openSettings()
+            })
         hosting = SizeReportingHostingView(rootView: SettingsView(store: store, model: model, updater: updater, actions: actions))
         hosting.onSizeChange = { [weak self] in
             // After SwiftUI's layout pass, not inside it.
@@ -202,14 +207,16 @@ final class SettingsPanelController: NSObject {
         return window.convertToScreen(button.convert(button.bounds, to: nil))
     }
 
-    private var screen: NSScreen {
+    /// Nil for a moment when no display is attached (the lid closes with none other, or while the
+    /// displays are rearranged); the panel stays where it is until one is back.
+    private var screen: NSScreen? {
         if itemIsVisible, let screen = item.button?.window?.screen { return screen }
         let pointer = NSEvent.mouseLocation
-        return NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main ?? NSScreen.screens[0]
+        return NSScreen.screens.first { $0.frame.contains(pointer) } ?? NSScreen.main ?? NSScreen.screens.first
     }
 
     private func placePanel() {
-        let screen = self.screen
+        guard let screen = self.screen else { return }
         let menuBar = max(NSStatusBar.system.thickness, screen.frame.maxY - screen.visibleFrame.maxY)
         let frame = PanelPlacement.frame(size: hosting.fittingSize, item: itemFrame, screen: screen.frame,
                                          visible: screen.visibleFrame, menuBarHeight: menuBar)

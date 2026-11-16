@@ -617,3 +617,445 @@ final class SettingsPanelLogicTests: XCTestCase {
         XCTAssertEqual(hidden.maxY, 943, "under the menu bar")
     }
 }
+
+final class AppBundleInfoTests: XCTestCase {
+    func testAgentsAndBackgroundAppsStayOutOfTheDock() {
+        XCTAssertFalse(AppBundleInfo.showsInDock(["LSUIElement": true]), "Apps.app (Launchpad) uses a boolean")
+        XCTAssertFalse(AppBundleInfo.showsInDock(["LSUIElement": NSNumber(value: 1)]), "Mission Control uses 1")
+        XCTAssertFalse(AppBundleInfo.showsInDock(["LSUIElement": "YES"]))
+        XCTAssertFalse(AppBundleInfo.showsInDock(["LSUIElement": " true "]))
+        XCTAssertFalse(AppBundleInfo.showsInDock(["LSUIElement": "1"]))
+        XCTAssertFalse(AppBundleInfo.showsInDock(["LSBackgroundOnly": true]))
+    }
+
+    func testOrdinaryAppsShowInTheDock() {
+        XCTAssertTrue(AppBundleInfo.showsInDock(nil), "no Info.plist")
+        XCTAssertTrue(AppBundleInfo.showsInDock([:]))
+        XCTAssertTrue(AppBundleInfo.showsInDock(["CFBundleIdentifier": "com.apple.Safari"]))
+        XCTAssertTrue(AppBundleInfo.showsInDock(["LSUIElement": false, "LSBackgroundOnly": NSNumber(value: 0)]))
+        XCTAssertTrue(AppBundleInfo.showsInDock(["LSUIElement": "0"]))
+        XCTAssertTrue(AppBundleInfo.showsInDock(["LSUIElement": "NO"]))
+    }
+
+    func testSystemLaunchersAreAgents() throws {
+        // On this Mac's own launchers, where present: they open something and quit at once.
+        for path in ["/System/Applications/Apps.app", "/System/Applications/Mission Control.app",
+                     "/System/Applications/Launchpad.app"] where FileManager.default.fileExists(atPath: path) {
+            XCTAssertFalse(AppBundleInfo.showsInDock(Bundle(path: path)?.infoDictionary), path)
+        }
+        if let safari = Bundle(path: "/Applications/Safari.app") {
+            XCTAssertTrue(AppBundleInfo.showsInDock(safari.infoDictionary))
+        }
+    }
+}
+
+// MARK: - Dock menus
+
+private func titles(_ items: [DockMenuItem]) -> [String] {
+    items.map { $0.kind == .separator ? "---" : $0.title }
+}
+
+private func options(_ items: [DockMenuItem]) -> [DockMenuItem] {
+    items.first { $0.title == "Options" }?.submenu ?? []
+}
+
+final class DockMenuTests: XCTestCase {
+    let s = DockStrings.english
+
+    func testRunningAppFollowsTheOriginalOrder() {
+        var state = AppMenuState(isRunning: true, keepsInDock: true)
+        state.windows = [MenuWindow(title: "Inbox", isMain: true), MenuWindow(title: "Draft", isMinimized: true)]
+        state.appleGroups = [[.item("New Window", .apple(AppleMenuPath(indexes: [3], titles: ["New Window"])))]]
+        state.openAtLogin = false
+        state.canShowAllWindows = true
+        let menu = DockMenuBuilder.app(state, strings: s)
+        XCTAssertEqual(titles(menu), ["Inbox", "Draft", "---", "New Window", "---", "Options", "---",
+                                      "Show All Windows", "Hide", "Quit"])
+        XCTAssertEqual(menu[0].mark, .check)
+        XCTAssertEqual(menu[1].mark, .diamond)
+        XCTAssertEqual(menu[0].command, .focusWindow(0))
+        XCTAssertEqual(titles(options(menu)), ["Keep in Dock", "Open at Login", "Show in Finder", "---", "Icon"])
+        XCTAssertEqual(options(menu)[0].mark, .check)
+        let hide = menu.first { $0.title == "Hide" }!, quit = menu.first { $0.title == "Quit" }!
+        XCTAssertEqual(hide.resolved(option: true).title, "Hide Others")
+        XCTAssertEqual(hide.resolved(option: true).command, .hideOthers)
+        XCTAssertEqual(quit.resolved(option: true).command, .forceQuit)
+        XCTAssertFalse(menu.contains { $0.command == .open }, "a running app has no Open")
+    }
+
+    func testAppThatIsNotRunning() {
+        var state = AppMenuState(isRunning: false, keepsInDock: true)
+        state.appleGroups = [[.item("Report.numbers", .apple(AppleMenuPath(indexes: [0], titles: ["Report.numbers"])))]]
+        let menu = DockMenuBuilder.app(state, strings: s)
+        XCTAssertEqual(titles(menu), ["Report.numbers", "---", "Options", "---", "Open"])
+        XCTAssertEqual(titles(options(menu)), ["Remove from Dock", "Show in Finder", "---", "Icon"],
+                       "unknown Open at Login is left out")
+    }
+
+    func testHiddenAndHungApps() {
+        let hidden = DockMenuBuilder.app(AppMenuState(isRunning: true, isHidden: true), strings: s)
+        XCTAssertTrue(hidden.contains { $0.title == "Show" && $0.command == .unhide })
+        let hung = DockMenuBuilder.app(AppMenuState(isRunning: true, notResponding: true), strings: s)
+        XCTAssertEqual(hung.first?.kind, .header)
+        XCTAssertEqual(hung.first?.title, "Application Not Responding")
+        XCTAssertEqual(hung.last?.title, "Force Quit")
+        XCTAssertEqual(hung.last?.command, .forceQuit)
+    }
+
+    func testFinderHasNoQuitAndOffersRelaunchWithOption() {
+        let menu = DockMenuBuilder.app(AppMenuState(isRunning: true, isFinder: true), strings: s)
+        XCTAssertFalse(menu.contains { $0.command == .quit })
+        XCTAssertEqual(Array(titles(visibleRows(menu, option: false)).suffix(2)), ["---", "Hide"])
+        XCTAssertEqual(visibleRows(menu, option: true).last?.title, "Relaunch")
+        XCTAssertTrue(menu.contains { $0.command == .newFinderWindow }, "Finder's own items without Accessibility")
+        XCTAssertEqual(titles(options(menu)), ["Icon"], "Finder can't be removed or opened at login")
+    }
+
+    func testAssignToBlockSitsInOptions() {
+        var state = AppMenuState(isRunning: true)
+        state.assignTo = [.header("Assign To"), .item("All Desktops", .none), .item("None", .none, mark: .check)]
+        XCTAssertEqual(titles(options(DockMenuBuilder.app(state, strings: s))),
+                       ["Keep in Dock", "Show in Finder", "---", "Assign To", "All Desktops", "None", "---", "Icon"])
+    }
+
+    func testTrashSeparatorAndStackMenus() {
+        XCTAssertEqual(titles(DockMenuBuilder.trash(isFull: false, strings: s)), ["Open", "---", "Empty Trash"])
+        XCTAssertFalse(DockMenuBuilder.trash(isFull: false, strings: s)[2].isEnabled)
+        XCTAssertEqual(titles(DockMenuBuilder.separator(autoHide: true, magnification: false, strings: s)),
+                       ["Turn Hiding Off", "Turn Magnification On", "---", "Dock Settings…"])
+        let stack = DockMenuBuilder.stack(name: "Downloads", sort: .dateAdded, display: .stack, view: .automatic, strings: s)
+        XCTAssertEqual(titles(stack), ["Sort by", "Display as", "View content as", "---", "Options", "---", "Open “Downloads”"])
+        XCTAssertEqual(stack[0].submenu?.first { $0.mark == .check }?.title, "Date Added")
+        XCTAssertEqual(stack[2].submenu?.first { $0.mark == .check }?.title, "Automatic")
+    }
+
+    func testVisibleRowsNeverDoubleOrEndOnSeparators() {
+        var relaunch = DockMenuItem.item("Relaunch", .relaunch)
+        relaunch.optionOnly = true
+        let items: [DockMenuItem] = [.separator, .item("A", .none), .separator, .separator, relaunch, .separator]
+        XCTAssertEqual(titles(visibleRows(items, option: false)), ["A"])
+        XCTAssertEqual(titles(visibleRows(items, option: true)), ["A", "---", "Relaunch"])
+    }
+
+    func testSystemStringsMatchApplesDock() {
+        // On a Mac in English these are the Dock's own words.
+        let system = DockStrings.system()
+        if Locale.preferredLanguages.first?.hasPrefix("en") == true {
+            XCTAssertEqual(system[.keepInDock], "Keep in Dock")
+            XCTAssertEqual(system[.showAs], "View content as")
+        }
+        XCTAssertEqual(DockStrings.system(dockPath: "/nonexistent")[.quit], "Quit")
+    }
+}
+
+final class AppleMenuMirrorTests: XCTestCase {
+    private func node(_ t: String, _ mark: String? = nil, enabled: Bool = true, alt: Bool = false,
+                      _ children: [AppleMenuNode] = []) -> AppleMenuNode {
+        AppleMenuNode(title: t, mark: mark, isEnabled: enabled, isOptionAlternate: alt, children: children)
+    }
+    private var sep: AppleMenuNode { AppleMenuNode(title: "", isEnabled: false) }
+
+    /// Safari's menu as read from Apple's Dock on macOS 27.0.1.
+    private var safari: [AppleMenuNode] {
+        [node("Inbox", "✓"), sep, node("New Window"), node("New Private Window"), sep,
+         node("Options", nil, [node("Keep in Dock", "✓"), node("Open at Login"), node("Show in Finder"), sep,
+                               node("Assign To"), node("All Desktops"), node("This Desktop"), node("None", "✓")]),
+         sep, node("Show All Windows"), node("Hide"), node("Hide Others", alt: true), node("Quit"), node("Force Quit", alt: true)]
+    }
+
+    func testTakesTheAppsOwnItemsAndLeavesOutItsWindows() {
+        let snap = AppleMenuMirror.parse(safari, windowTitles: ["Inbox"], strings: .english)
+        XCTAssertEqual(snap.groups.map { $0.map(\.title) }, [["New Window", "New Private Window"]])
+        XCTAssertEqual(snap.groups[0][0].command, .apple(AppleMenuPath(indexes: [2], titles: ["New Window"])))
+        XCTAssertEqual(snap.openAtLogin, false)
+        XCTAssertEqual(snap.openAtLoginPath, AppleMenuPath(indexes: [5, 1], titles: ["Options", "Open at Login"]))
+        XCTAssertEqual(snap.assignTo.map(\.title), ["Assign To", "All Desktops", "This Desktop", "None"])
+        XCTAssertEqual(snap.assignTo.first?.kind, .header)
+        XCTAssertEqual(snap.assignTo.last?.mark, .check)
+        XCTAssertEqual(snap.assignTo[1].command, .apple(AppleMenuPath(indexes: [5, 5], titles: ["Options", "All Desktops"])))
+        XCTAssertTrue(snap.canShowAllWindows)
+        XCTAssertFalse(snap.notResponding)
+    }
+
+    func testNeverTakesApplesKeepInDock() {
+        let snap = AppleMenuMirror.parse(safari, windowTitles: ["Inbox"], strings: .english)
+        let all = snap.groups.flatMap { $0 } + snap.assignTo
+        XCTAssertFalse(all.contains { $0.title == "Keep in Dock" || $0.title == "Remove from Dock" })
+    }
+
+    func testTheAppsTilesTopLevelRemoveFromDockIsLeftOut() {
+        // Apple's menu for the Apps tile (Launchpad) on macOS 27.
+        let menu = [node("Remove from Dock"), sep, node("Show Apps"), sep, node("Options", nil, [node("Open at Login")]), sep, node("Open")]
+        let snap = AppleMenuMirror.parse(menu, windowTitles: [], strings: .english)
+        XCTAssertEqual(snap.groups.map { $0.map(\.title) }, [["Show Apps"]])
+    }
+
+    func testWithoutOptionsHideAndShowAllWindowsAreStillLeftOut() {
+        // Finder with one desktop: no Assign To, so Apple's menu has no Options submenu.
+        let menu = [node("Documents", "✓"), sep, node("New Finder Window"), node("Find…"), sep,
+                    node("Show All Windows"), node("Hide"), node("Hide Others", alt: true)]
+        let snap = AppleMenuMirror.parse(menu, windowTitles: [], strings: .english)
+        XCTAssertEqual(snap.groups.map { $0.map(\.title) }, [["New Finder Window", "Find…"]])
+        XCTAssertTrue(snap.canShowAllWindows)
+    }
+
+    func testWindowsOnAnotherDesktopAreStillRecognisedByTheirMark() {
+        // The app reports no windows here (they're on another desktop), but Apple marks the main one.
+        let menu = [node("Elsewhere", "✓"), node("Also elsewhere"), sep, node("New Window"), sep, node("Options", nil, [node("Keep in Dock")])]
+        XCTAssertEqual(AppleMenuMirror.parse(menu, windowTitles: [], strings: .english).groups.map { $0.map(\.title) }, [["New Window"]])
+        // An app that isn't running has no windows: its first rows are recent documents, whatever their marks.
+        let recents = [node("Budget.numbers", "✓"), sep, node("Options", nil, [node("Remove from Dock")]), sep, node("Open")]
+        XCTAssertEqual(AppleMenuMirror.parse(recents, windowTitles: [], isRunning: false, strings: .english).groups.map { $0.map(\.title) },
+                       [["Budget.numbers"]])
+    }
+
+    func testWithoutWindowsTheFirstGroupIsTheApps() {
+        let menu = [node("New Window"), sep, node("Options", nil, [node("Keep in Dock")]), sep, node("Hide"), node("Quit")]
+        let snap = AppleMenuMirror.parse(menu, windowTitles: [], strings: .english)
+        XCTAssertEqual(snap.groups.map { $0.map(\.title) }, [["New Window"]])
+        XCTAssertNil(snap.openAtLogin)
+        XCTAssertFalse(snap.canShowAllWindows)
+    }
+
+    func testMinimizedWindowsMarkTheWindowGroup() {
+        let menu = [node("Elsewhere", "◆"), sep, node("Play"), sep, node("Options", nil, [node("Keep in Dock")])]
+        XCTAssertEqual(AppleMenuMirror.parse(menu, windowTitles: [], strings: .english).groups.map { $0.map(\.title) }, [["Play"]])
+    }
+
+    func testNotRespondingAndOptionAlternatesInTheAppsItems() {
+        let menu = [node("Application Not Responding", enabled: false), sep, node("Inbox"), sep,
+                    node("Pause"), node("Stop", alt: true), sep, node("Options", nil, [node("Keep in Dock")])]
+        let snap = AppleMenuMirror.parse(menu, windowTitles: ["Inbox"], strings: .english)
+        XCTAssertTrue(snap.notResponding)
+        XCTAssertEqual(snap.groups.map { $0.map(\.title) }, [["Pause"]])
+        XCTAssertEqual(snap.groups[0][0].optionTitle, "Stop")
+    }
+
+    func testRecentDocumentsOfAnAppThatIsNotRunning() {
+        let menu = [node("Budget.numbers"), node("Trip.numbers"), sep,
+                    node("Options", nil, [node("Remove from Dock"), node("Open at Login", "✓"), node("Show in Finder")]), sep, node("Open")]
+        let snap = AppleMenuMirror.parse(menu, windowTitles: [], strings: .english)
+        XCTAssertEqual(snap.groups.map { $0.map(\.title) }, [["Budget.numbers", "Trip.numbers"]])
+        XCTAssertEqual(snap.openAtLogin, true)
+    }
+}
+
+final class CalloutGeometryTests: XCTestCase {
+    let screen = CGRect(x: 0, y: 0, width: 1512, height: 982)
+
+    func testPointerIsOnTheIconAndTheMenuStartsNearItsLeftEdge() {
+        let p = Callout.place(size: CGSize(width: 200, height: 150), anchorX: 700, anchorTop: 80, screen: screen, top: 950, cornerRadius: 6)
+        XCTAssertEqual(p.pointerX, 700)
+        XCTAssertEqual(p.body.minX, 700 - Callout.axisInset)
+        XCTAssertEqual(p.body.minY, 80 + Callout.gap + Callout.pointerHeight)
+        XCTAssertEqual(p.frame.minY, 80 + Callout.gap)
+        XCTAssertFalse(p.isClipped)
+    }
+
+    func testAtTheScreensEdgesTheMenuMovesButThePointerStaysOnTheIcon() {
+        let right = Callout.place(size: CGSize(width: 200, height: 150), anchorX: 1490, anchorTop: 80, screen: screen, top: 950, cornerRadius: 6)
+        XCTAssertEqual(right.body.maxX, screen.maxX - Callout.margin)
+        XCTAssertEqual(right.pointerX, right.body.maxX - 6 - Callout.pointerWidth / 2, "as far over as the corner allows")
+        let left = Callout.place(size: CGSize(width: 200, height: 150), anchorX: 20, anchorTop: 80, screen: screen, top: 950, cornerRadius: 6)
+        XCTAssertEqual(left.body.minX, Callout.margin)
+        XCTAssertEqual(left.pointerX, Callout.margin + 6 + Callout.pointerWidth / 2, "as near the icon as the corner allows")
+    }
+
+    func testTallMenusAreClippedBelowTheMenuBar() {
+        let p = Callout.place(size: CGSize(width: 200, height: 2000), anchorX: 700, anchorTop: 80, screen: screen, top: 950, cornerRadius: 6)
+        XCTAssertTrue(p.isClipped)
+        XCTAssertEqual(p.body.maxY, 950 - Callout.margin)
+    }
+
+    func testCenteredGridsAndSecondScreens() {
+        let other = CGRect(x: -1920, y: 0, width: 1920, height: 1080)
+        let p = Callout.place(size: CGSize(width: 400, height: 300), anchorX: -1000, anchorTop: 80, screen: other, top: 1050,
+                              cornerRadius: 6, alignment: .centered)
+        XCTAssertEqual(p.body.midX, -1000)
+        XCTAssertEqual(p.pointerX, -1000)
+    }
+
+    func testSubmenusOpenRightOrFlipLeft() {
+        let parent = CGRect(x: 600, y: 100, width: 200, height: 200)
+        let row = CGRect(x: 600, y: 250, width: 200, height: 19)
+        let r = Callout.submenu(size: CGSize(width: 150, height: 100), row: row, parent: parent, screen: screen, top: 950, inset: 4)
+        XCTAssertEqual(r.frame.minX, parent.maxX - 2)
+        XCTAssertEqual(r.frame.maxY, row.maxY + 4)
+        let edge = CGRect(x: 1300, y: 100, width: 200, height: 200)
+        let l = Callout.submenu(size: CGSize(width: 150, height: 100), row: row, parent: edge, screen: screen, top: 950, inset: 4)
+        XCTAssertEqual(l.frame.maxX, edge.minX + 2)
+    }
+
+    func testOutlineContainsBodyAndPointerTip() {
+        let path = Callout.path(size: CGSize(width: 200, height: 113), pointerX: 40, cornerRadius: 6)
+        XCTAssertTrue(path.contains(CGPoint(x: 100, y: 60)))
+        XCTAssertTrue(path.contains(CGPoint(x: 40, y: 2)), "near the pointer's tip")
+        XCTAssertFalse(path.contains(CGPoint(x: 100, y: 5)), "beside the pointer, below the body")
+    }
+}
+
+final class MenuTrackingTests: XCTestCase {
+    func testReleaseRule() {
+        XCTAssertEqual(MenuTracking.release(enteredMenu: true, overItem: true, overMenu: true), .choose)
+        XCTAssertEqual(MenuTracking.release(enteredMenu: false, overItem: false, overMenu: false), .stayOpen, "quick right-click")
+        XCTAssertEqual(MenuTracking.release(enteredMenu: true, overItem: false, overMenu: true), .stayOpen, "on a separator")
+        XCTAssertEqual(MenuTracking.release(enteredMenu: true, overItem: false, overMenu: false), .close)
+    }
+
+    func testArrowKeysSkipWhatCantBeChosenAndWrap() {
+        let sel = [false, true, false, true, true]
+        XCTAssertEqual(MenuTracking.next(from: nil, step: 1, selectable: sel), 1)
+        XCTAssertEqual(MenuTracking.next(from: 1, step: 1, selectable: sel), 3)
+        XCTAssertEqual(MenuTracking.next(from: 4, step: 1, selectable: sel), 1)
+        XCTAssertEqual(MenuTracking.next(from: nil, step: -1, selectable: sel), 4)
+        XCTAssertNil(MenuTracking.next(from: nil, step: 1, selectable: [false, false]))
+    }
+
+    func testTypeSelect() {
+        let t = ["Show All Windows", "Hide", "Hide Others", "Quit", "Show in Finder"]
+        let sel = [true, true, true, true, true]
+        XCTAssertEqual(MenuTracking.typeSelect("q", titles: t, selectable: sel, from: nil), 3)
+        XCTAssertEqual(MenuTracking.typeSelect("s", titles: t, selectable: sel, from: nil), 0)
+        XCTAssertEqual(MenuTracking.typeSelect("s", titles: t, selectable: sel, from: 0), 4, "the same letter again moves on")
+        XCTAssertEqual(MenuTracking.typeSelect("hide o", titles: t, selectable: sel, from: 1), 2)
+        XCTAssertNil(MenuTracking.typeSelect("z", titles: t, selectable: sel, from: nil))
+    }
+}
+
+final class StackTests: XCTestCase {
+    private var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory.appendingPathComponent("stacks-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws { try? FileManager.default.removeItem(at: dir) }
+
+    func testStoreAddsMovesAndKeepsItsOwnFile() {
+        let file = dir.appendingPathComponent("stacks.json")
+        let store = StackStore(url: file)
+        let a = store.add(folder: dir.appendingPathComponent("A"), at: 0)
+        let b = store.add(folder: dir.appendingPathComponent("B"), at: 5)
+        XCTAssertEqual(store.pins.map(\.id), [a, b])
+        XCTAssertEqual(store.add(folder: dir.appendingPathComponent("B"), at: 0), b, "the same folder again moves it")
+        XCTAssertEqual(store.pins.map(\.id), [b, a])
+        store.update(a) { $0.view = .grid }
+        let reloaded = StackStore(url: file)
+        XCTAssertEqual(reloaded.pins, store.pins)
+        XCTAssertEqual(reloaded.pin(a)?.view, .grid)
+        reloaded.remove(b)
+        XCTAssertEqual(StackStore(url: file).pins.map(\.id), [a])
+    }
+
+    func testDamagedEntriesAndMissingKeysDontLoseTheRest() throws {
+        let file = dir.appendingPathComponent("stacks.json")
+        try Data(#"[{"id":"stack:1","path":"/tmp/x","view":"sideways"},{"bogus":true},{"id":"stack:2","path":"/tmp/y"}]"#.utf8).write(to: file)
+        let store = StackStore(url: file)
+        XCTAssertEqual(store.pins.map(\.id), ["stack:1", "stack:2"])
+        XCTAssertEqual(store.pins[0].view, .automatic)
+        XCTAssertEqual(store.pins[1].display, .stack)
+    }
+
+    func testDownloadsSortsByDateAddedAndFirstRunImportsApplesFolders() throws {
+        XCTAssertEqual(StackPin(path: "/Users/x/Downloads").sort, .dateAdded)
+        XCTAssertEqual(StackPin(path: "/Users/x/Documents").sort, .name)
+        let folder = dir.appendingPathComponent("Docs")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let tiles: [[String: Any]] = [
+            ["tile-data": ["file-data": ["_CFURLString": folder.absoluteString], "showas": 2, "displayas": 1, "arrangement": 3]],
+            ["tile-data": ["file-data": ["_CFURLString": "/nonexistent/folder"]]],
+        ]
+        let pins = StackStore.appleDockFolders(tiles)
+        XCTAssertEqual(pins.count, 1)
+        XCTAssertEqual(pins[0].view, .grid)
+        XCTAssertEqual(pins[0].display, .folder)
+        XCTAssertEqual(pins[0].sort, .dateModified)
+    }
+
+    func testContentsSkipHiddenFilesAndSortLikeTheDock() throws {
+        let fm = FileManager.default
+        for name in ["b.txt", "A.txt", "c10.txt", "c9.txt", ".hidden"] {
+            fm.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data())
+        }
+        try fm.createDirectory(at: dir.appendingPathComponent("Sub"), withIntermediateDirectories: true)
+        let entries = StackEntry.contents(of: dir)
+        XCTAssertEqual(entries.count, 5)
+        XCTAssertEqual(StackEntry.sorted(entries, by: .name).map(\.name), ["A.txt", "b.txt", "c9.txt", "c10.txt", "Sub"])
+        XCTAssertTrue(entries.first { $0.name == "Sub" }!.isFolder)
+        var older = StackEntry(url: dir, name: "old", isFolder: false, added: Date(timeIntervalSince1970: 1))
+        let newer = StackEntry(url: dir, name: "new", isFolder: false, added: Date(timeIntervalSince1970: 2))
+        XCTAssertEqual(StackEntry.sorted([older, newer], by: .dateAdded).map(\.name), ["new", "old"])
+        older.added = nil
+        XCTAssertEqual(StackEntry.sorted([older, newer], by: .dateAdded).first?.name, "new")
+    }
+
+    func testFanRisesAndBendsRight() {
+        let slots = StackLayout.fan(count: 8)
+        XCTAssertEqual(slots.count, 8)
+        XCTAssertEqual(slots[0].center, CGPoint(x: 0, y: StackLayout.fanStart))
+        for (a, b) in zip(slots, slots.dropFirst()) {
+            XCTAssertGreaterThan(b.center.y, a.center.y)
+            XCTAssertGreaterThanOrEqual(b.center.x, a.center.x)
+            XCTAssertLessThanOrEqual(b.rotation, a.rotation)
+        }
+        XCTAssertEqual(StackLayout.fanCapacity(height: 10_000), StackLayout.fanMaximum)
+        XCTAssertEqual(StackLayout.fanCapacity(height: 0), 1)
+    }
+
+    func testAutomaticChoosesFanOnlyWhenItFits() {
+        XCTAssertEqual(StackLayout.resolve(.automatic, count: 5, fanCapacity: 10), .fan)
+        XCTAssertEqual(StackLayout.resolve(.automatic, count: 10, fanCapacity: 10), .grid, "one row is Open in Finder")
+        XCTAssertEqual(StackLayout.resolve(.list, count: 500, fanCapacity: 10), .list)
+    }
+
+    func testGridIsAboutSquareAndFitsTheScreen() {
+        XCTAssertEqual(StackLayout.gridColumns(count: 1, maxWidth: 1500), 1)
+        XCTAssertEqual(StackLayout.gridColumns(count: 12, maxWidth: 1500), 5)
+        XCTAssertEqual(StackLayout.gridColumns(count: 200, maxWidth: 1500), 8)
+        XCTAssertEqual(StackLayout.gridColumns(count: 200, maxWidth: 400), 3)
+        let size = StackLayout.gridSize(count: 12, columns: 5)
+        XCTAssertEqual(size.width, 5 * StackLayout.gridCell.width + 2 * StackLayout.gridPadding)
+    }
+
+    func testDraggedItemsStayInTheirOwnSection() {
+        // Finder, two kept apps, one open app, then three folders (the dragged item not counted).
+        XCTAssertEqual(DockSections.clamp(0, isStack: false, keptApps: 3, apps: 4, stacks: 3), 1, "never before Finder")
+        XCTAssertEqual(DockSections.clamp(6, isStack: false, keptApps: 3, apps: 4, stacks: 3), 3, "not among open apps or folders")
+        XCTAssertEqual(DockSections.clamp(1, isStack: true, keptApps: 3, apps: 4, stacks: 2), 4, "folders stay after the apps")
+        XCTAssertEqual(DockSections.clamp(9, isStack: true, keptApps: 3, apps: 4, stacks: 2), 6)
+    }
+}
+
+final class StackFilingTests: XCTestCase {
+    func testMovesCopiesAndNeverReplaces() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("filing-\(UUID().uuidString)")
+        let folder = root.appendingPathComponent("Folder"), other = root.appendingPathComponent("Other")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        try fm.createDirectory(at: other, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: root) }
+        let a = other.appendingPathComponent("a.txt"), b = other.appendingPathComponent("b.txt")
+        let clash = other.appendingPathComponent("same.txt")
+        for f in [a, b, clash] { try Data(f.lastPathComponent.utf8).write(to: f) }
+        try Data("keep me".utf8).write(to: folder.appendingPathComponent("same.txt"))
+
+        let moved = StackFiling.file([a], into: folder, copy: false)
+        XCTAssertEqual(moved[a], true)
+        XCTAssertFalse(fm.fileExists(atPath: a.path), "moved on the same disk")
+        XCTAssertTrue(fm.fileExists(atPath: folder.appendingPathComponent("a.txt").path))
+
+        let copied = StackFiling.file([b], into: folder, copy: true)
+        XCTAssertEqual(copied[b], true)
+        XCTAssertTrue(fm.fileExists(atPath: b.path), "Option copies")
+
+        XCTAssertEqual(StackFiling.file([clash], into: folder, copy: false)[clash], false)
+        XCTAssertEqual(try String(contentsOf: folder.appendingPathComponent("same.txt"), encoding: .utf8), "keep me", "never replaced")
+        XCTAssertTrue(fm.fileExists(atPath: clash.path))
+
+        XCTAssertEqual(StackFiling.file([folder], into: folder.appendingPathComponent("..").appendingPathComponent("Folder"), copy: false)[folder], false,
+                       "not into itself")
+        let inside = folder.appendingPathComponent("a.txt")
+        XCTAssertEqual(StackFiling.file([inside], into: folder, copy: false)[inside], false, "already there")
+    }
+}
