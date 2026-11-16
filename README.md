@@ -4,7 +4,11 @@
 
 The 3D glass Dock, back on your Mac. Free and open source. [oldmacdoc.edbn.me](https://oldmacdoc.edbn.me)
 
-![OldMacDoc](website/assets/hero.webp)
+![OldMacDoc on the Clear Glass shelf](website/assets/shelf-clear.webp)
+
+![OldMacDoc on the Frosted shelf](website/assets/shelf-frosted.webp)
+
+![OldMacDoc on the Smoke shelf](website/assets/shelf-smoke.webp)
 
 - Clear Glass, Frosted and Smoke shelves, with reflections and lights under open apps.
 - Magnification, auto-hide, drag to rearrange, and one glossy finish for every icon.
@@ -28,6 +32,10 @@ brew install xcodegen
 make run
 ```
 
-[Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [Security](SECURITY.md) · [Design notes](docs/DESIGN.md) · [MIT License](LICENSE)
+- [Contributing](CONTRIBUTING.md)
+- [Changelog](CHANGELOG.md)
+- [Security](SECURITY.md)
+- [Design notes](docs/DESIGN.md)
+- [MIT License](LICENSE)
 
 Mac, macOS and Dock are trademarks of Apple Inc. OldMacDoc is not affiliated with Apple.
