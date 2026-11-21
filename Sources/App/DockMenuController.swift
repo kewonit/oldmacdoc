@@ -510,7 +510,7 @@ final class MenuRowsView: NSView {
         let attrs: [NSAttributedString.Key: Any] = [.font: style.font]
         let widest = rows.map { ($0.title as NSString).size(withAttributes: attrs).width }.max() ?? 0
         let width = min(max(widest + textX + MenuStyle.trailingInset + (hasSubmenus ? MenuStyle.arrowSpace : 0), 120), 460)
-        let height = rows.reduce(MenuStyle.verticalPadding * 2) { $0 + height(of: $1) }
+        let height = rows.reduce(MenuStyle.verticalPadding * 2) { $0 + self.height(of: $1) }
         return CGSize(width: ceil(width), height: ceil(height))
     }
 
