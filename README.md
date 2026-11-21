@@ -25,7 +25,7 @@ Needs macOS 14 Sonoma or later, on Apple silicon or Intel.
 
 While OldMacDoc runs, Apple's Dock steps aside. Choose **Quit** in the panel under the menu bar icon and Apple's Dock comes back exactly as it was. It comes back even if OldMacDoc crashes.
 
-OldMacDoc updates itself; it checks once a day. It asks for one permission, Accessibility, so its menus can show each app's windows and its own items; everything else works without it.
+OldMacDoc updates itself; it checks once a day. It asks for one permission, Accessibility, so its menus can show each app's windows and its own items, and so maximised windows stop above the dock while it doesn't hide; everything else works without it.
 
 ## Build
 

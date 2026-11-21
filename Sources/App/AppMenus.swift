@@ -2,7 +2,8 @@ import AppKit
 import ApplicationServices
 
 /// The Accessibility permission. With it, the dock's menus show each app's windows and its own
-/// items, as the original Dock's did; without it they show everything else.
+/// items, as the original Dock's did, and maximised windows stop above the dock while it doesn't hide
+/// (DockClearanceController); without it the menus show everything else.
 enum AccessibilityAccess {
     static var isTrusted: Bool { AXIsProcessTrusted() }
 
@@ -18,19 +19,6 @@ enum AccessibilityAccess {
     }
 
 }
-
-// MARK: - Small Accessibility helpers
-
-private func ax(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
-    var value: AnyObject?
-    return AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success ? value : nil
-}
-
-private func axChildren(_ element: AXUIElement) -> [AXUIElement] {
-    ax(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-}
-
-private func axRole(_ element: AXUIElement) -> String { ax(element, kAXRoleAttribute) as? String ?? "" }
 
 // MARK: - An app's windows
 

@@ -16,6 +16,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var dockPrefsObserver: NSObjectProtocol?
     private var screensObserver: NSObjectProtocol?
     private var addDesktopSideSink: AnyCancellable?
+    /// Keeps maximised windows clear of the dock while it doesn't hide.
+    private var clearance: DockClearanceController?
+    private var autoHideSink: AnyCancellable?
+    private var accessibilityObserver: NSObjectProtocol?
     private var isDuplicate = false
     #if DEBUG
     private var debugObservers: [NSObjectProtocol] = []
@@ -53,6 +57,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dock = DockWindowController(model: model, settings: settings, icons: icons)
         dock?.showsInMissionControl = appleDock.sideEdge != nil
         dock?.view.openSettings = { [weak self] in self?.settingsPanel.open() }
+        // Apple's Dock is parked hiding, so macOS maximises windows to the bottom of the screen: while ours
+        // doesn't hide, they're shortened to end above it (with Accessibility).
+        if let dock {
+            let clearance = DockClearanceController(restingTop: dock.view.restingTop)
+            dock.view.onRestingTopChange = { [weak clearance] in clearance?.restingTop = $0 }
+            dock.onSystemDockChange = { [weak clearance] in clearance?.systemDockShowing = $0 }
+            // Mission Control may already be open (an update relaunching the app).
+            clearance.systemDockShowing = dock.isSystemDockShowing
+            self.clearance = clearance
+            autoHideSink = settings.$settings.map(\.autoHide).removeDuplicates()
+                .sink { [weak clearance] in clearance?.wanted = !$0 }
+            // Posted when apps are allowed or refused Accessibility; macOS answers the new way a moment later.
+            accessibilityObserver = DistributedNotificationCenter.default().addObserver(
+                forName: .init("com.apple.accessibility.api"), object: nil, queue: .main) { [weak self] _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    MainActor.assumeIsolated { self?.clearance?.refreshTrust() }
+                }
+            }
+        }
         // Each app's windows and its own menu items need Accessibility. macOS asks once; after that the
         // settings panel shows whether it's allowed, with a way to System Settings.
         let askedKey = "AskedForAccessibility"
@@ -75,7 +98,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: .init("com.apple.dock.prefchanged"), object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.reassertAppleDock() }
         }
-        schedule(every: 2) { [weak self] in self?.reassertAppleDock() }
+        schedule(every: 2) { [weak self] in
+            self?.reassertAppleDock()
+            // Accessibility can be allowed or taken away in System Settings at any time.
+            self?.clearance?.refreshTrust()
+        }
         #if DEBUG
         installDebugHooks()
         #endif
@@ -126,6 +153,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Closes our dock before Apple's comes back, so the two are never on screen together.
     private func cleanUp() {
         settings.flush()
+        // Windows stay as they are: Apple's Dock may come back at the bottom, where they'd grow.
+        clearance?.stop()
         dock?.close()
         if appleDock.isParked { appleDock.restore() }
     }
@@ -163,6 +192,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case "appearance light": NSApp.appearance = NSAppearance(named: .aqua)
                 case "appearance dark": NSApp.appearance = NSAppearance(named: .darkAqua)
                 case "appearance": NSApp.appearance = nil
+                // Looks at every window again; `clearance dump` writes oldmacdoc-clearance.json in the user's
+                // temporary folder (what's watched, the dock's band, and what was done to each window).
+                case "clearance sweep": self?.clearance?.debugSweep()
+                case "clearance dump":
+                    self?.clearance?.debugDump(to: FileManager.default.temporaryDirectory.appendingPathComponent("oldmacdoc-clearance.json"))
                 default: break
                 }
             }

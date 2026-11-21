@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.2.4
+
+- **Maximised windows stop above the dock.** With Hide automatically off, a window you zoomed, filled (Window > Fill, or a double-click on its title bar) or tiled to a side or a bottom corner ran under the dock: Apple's parked Dock leaves macOS thinking the bottom of the screen is free. Now the window steps up to end above the dock, as it would with Apple's Dock, and windows that were already maximised step up when you turn hiding off. Zoom it again and it goes back where it was. It needs Accessibility, the permission the menus already use.
+
 ## 1.2.3
 
 Fixes from a full review of 1.2:

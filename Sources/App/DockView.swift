@@ -20,6 +20,9 @@ final class DockView: NSView, NSDraggingSource {
     var onShelfChange: ((ShelfGeometry, CGFloat, Float) -> Void)?
     /// Pointer activity the window controller should re-evaluate (hover, auto-hide).
     var onPointerActivity: (() -> Void)?
+    /// The resting icons' top moved (size, a crowded dock, another shelf): where windows end while the
+    /// dock doesn't hide (DockClearanceController).
+    var onRestingTopChange: ((CGFloat) -> Void)?
 
     final class TileElement: NSAccessibilityElement {
         var onPress: (() -> Void)?
@@ -208,6 +211,9 @@ final class DockView: NSView, NSDraggingSource {
     private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     /// How far the dock slides to get completely off screen (resting icons, their shadows and glow).
     private var slideDistance: CGFloat { (standY + tileSize * 1.1 + 12).rounded() }
+    /// The top of the resting (unmagnified) icons, above the bottom of the screen.
+    var restingTop: CGFloat { standY + tileSize + 4 }
+    private var reportedRestingTop: CGFloat = -1
 
     init(model: DockModel, settings: SettingsStore, icons: IconEngine, trash: TrashMonitor) {
         self.model = model
@@ -583,6 +589,10 @@ final class DockView: NSView, NSDraggingSource {
         maxScale = magnified / tileSize
         let s = tileSize
         standY = (look.iconBase * s).rounded()
+        if restingTop != reportedRestingTop {
+            reportedRestingTop = restingTop
+            onRestingTopChange?(restingTop)
+        }
         // The bump grows and shrinks with `magnify`, around where the pointer is (or last was).
         // Tiles arriving or leaving take part of their place, eased so they start and settle gently.
         let weights = ids.map { id -> CGFloat in
@@ -1141,7 +1151,7 @@ final class DockView: NSView, NSDraggingSource {
         guard isShown else { return false }
         guard p.x >= shelfRect.minX, p.x <= shelfRect.maxX, p.y >= 0 else { return false }
         let magnified = pointerTarget != nil || magnify > 0.01
-        let height = magnified ? standY + tileSize * maxScale + 8 : standY + tileSize + 4
+        let height = magnified ? standY + tileSize * maxScale + 8 : restingTop
         return p.y <= height
     }
 

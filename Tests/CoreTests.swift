@@ -1122,3 +1122,175 @@ final class LiveMenuStateTests: XCTestCase {
                                               bundleIDOf: { _ in nil }))
     }
 }
+
+final class DockClearanceTests: XCTestCase {
+    /// A 1512 × 982 display with a 33 pt menu bar, and a dock whose resting icons reach 77 pt up.
+    private let g = DockClearance.geometry(display: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                                           visible: CGRect(x: 0, y: 0, width: 1512, height: 949),
+                                           restingTop: 77, primaryMaxY: 982)
+    private let fill = CGRect(x: 0, y: 33, width: 1512, height: 949)
+
+    private func act(_ frame: CGRect, previous: CGRect? = nil, record: DockClearance.Record? = nil, edgeDrag: Bool = false,
+                     in geometry: DockClearance.Geometry? = nil) -> DockClearance.Action {
+        DockClearance.action(DockClearance.Window(frame: frame), previous: previous, record: record, edgeDrag: edgeDrag,
+                             in: geometry ?? g)
+    }
+
+    func testGeometryIsInAccessibilityCoordinates() {
+        XCTAssertEqual(g.display, CGRect(x: 0, y: 0, width: 1512, height: 982))
+        XCTAssertEqual(g.visible, CGRect(x: 0, y: 33, width: 1512, height: 949), "below the menu bar")
+        XCTAssertEqual(g.bandTop, 905)
+        // A display above the main one has a negative y; one to the right keeps its x.
+        XCTAssertEqual(DockClearance.axRect(CGRect(x: 0, y: 982, width: 2560, height: 1440), primaryMaxY: 982),
+                       CGRect(x: 0, y: -1440, width: 2560, height: 1440))
+        XCTAssertEqual(DockClearance.axRect(CGRect(x: 1512, y: -98, width: 1920, height: 1080), primaryMaxY: 982),
+                       CGRect(x: 1512, y: 0, width: 1920, height: 1080))
+    }
+
+    func testFillStopsAboveTheDock() {
+        XCTAssertEqual(act(fill), .shrink(CGRect(x: 0, y: 33, width: 1512, height: 872)), "same top, left and width")
+    }
+
+    func testHalvesAndBottomQuartersShrinkButTopTilesDont() {
+        XCTAssertEqual(act(CGRect(x: 0, y: 33, width: 756, height: 949)), .shrink(CGRect(x: 0, y: 33, width: 756, height: 872)))
+        XCTAssertEqual(act(CGRect(x: 756, y: 33, width: 756, height: 949)), .shrink(CGRect(x: 756, y: 33, width: 756, height: 872)))
+        XCTAssertEqual(act(CGRect(x: 0, y: 507.5, width: 756, height: 474.5)), .shrink(CGRect(x: 0, y: 507.5, width: 756, height: 397)))
+        XCTAssertEqual(act(CGRect(x: 756, y: 507.5, width: 756, height: 474.5)), .shrink(CGRect(x: 756, y: 507.5, width: 756, height: 397)))
+        XCTAssertEqual(act(CGRect(x: 0, y: 33, width: 1512, height: 474.5)), .leave, "top half")
+        XCTAssertEqual(act(CGRect(x: 756, y: 33, width: 756, height: 474.5)), .leave, "top right quarter")
+    }
+
+    func testNarrowZoomShrinks() {
+        // AppKit's zoom keeps a width that fits the content: full height, against the top only.
+        XCTAssertEqual(act(CGRect(x: 300, y: 33, width: 700, height: 949)), .shrink(CGRect(x: 300, y: 33, width: 700, height: 872)))
+    }
+
+    func testWindowPutNearTheDockByHandIsLeftAlone() {
+        // Against the left edge, ending a little above the bottom of the screen: never maximised.
+        let frame = CGRect(x: 0, y: 300, width: 600, height: 620)
+        XCTAssertEqual(act(frame), .leave)
+        // The same frame on a window shortened before (the dock grew since) moves up with the dock.
+        let record = DockClearance.Record(before: nil, full: fill, set: frame)
+        XCTAssertEqual(act(frame, record: record), .shrink(CGRect(x: 0, y: 300, width: 600, height: 605)))
+    }
+
+    func testFillWithTheMenuBarHiddenShrinks() {
+        // With the menu bar hidden, Fill covers the whole display, as full screen does: only the window can tell.
+        let hidden = DockClearance.geometry(display: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                                            visible: CGRect(x: 0, y: 0, width: 1920, height: 1080), restingTop: 77, primaryMaxY: 1080)
+        let whole = CGRect(x: 0, y: 0, width: 1920, height: 1080)
+        XCTAssertEqual(act(whole, in: hidden), .shrink(CGRect(x: 0, y: 0, width: 1920, height: 1003)))
+        XCTAssertEqual(DockClearance.action(DockClearance.Window(frame: whole, isFullScreen: true), previous: nil, record: nil,
+                                            edgeDrag: false, in: hidden), .leave)
+    }
+
+    func testWindowOnlyTouchingTheBottomIsLeftAlone() {
+        XCTAssertEqual(act(CGRect(x: 300, y: 500, width: 600, height: 482)), .leave)
+        XCTAssertEqual(act(CGRect(x: 300, y: 300, width: 600, height: 400)), .leave, "nowhere near the dock")
+    }
+
+    func testWindowEndingInsideTheBandShrinks() {
+        // Zoomed while Apple's shorter Dock was showing.
+        XCTAssertEqual(act(CGRect(x: 0, y: 33, width: 1512, height: 900)), .shrink(CGRect(x: 0, y: 33, width: 1512, height: 872)))
+        // Already above the dock: left as it is.
+        XCTAssertEqual(act(CGRect(x: 0, y: 33, width: 1512, height: 872)), .leave)
+        // The dock grew: a window that ended at its old top moves up with it.
+        var taller = g
+        taller.bandTop = 882
+        let set = CGRect(x: 0, y: 33, width: 1512, height: 872)
+        XCTAssertEqual(act(set, in: taller), .shrink(CGRect(x: 0, y: 33, width: 1512, height: 849)))
+    }
+
+    func testWindowsOnOtherDisplaysAreLeftAlone() {
+        XCTAssertEqual(act(CGRect(x: 1512, y: 0, width: 1920, height: 1080)), .leave, "to the right")
+        XCTAssertEqual(act(CGRect(x: 0, y: -1440, width: 2560, height: 1440)), .leave, "above")
+        // Mostly on the other display, though its bottom left corner is in the band.
+        XCTAssertEqual(act(CGRect(x: 1400, y: 33, width: 1000, height: 949)), .leave)
+    }
+
+    func testFullScreenAndOtherWindowsAreLeftAlone() {
+        XCTAssertEqual(act(g.display), .leave, "display-sized")
+        // Full screen on a display with a notch has the frame of a filled window: only the window can tell.
+        for window in [DockClearance.Window(frame: fill, isFullScreen: true), DockClearance.Window(frame: fill, isMinimized: true),
+                       DockClearance.Window(frame: fill, isStandard: false), DockClearance.Window(frame: fill, isResizable: false)] {
+            XCTAssertEqual(DockClearance.action(window, previous: nil, record: nil, edgeDrag: false, in: g), .leave)
+        }
+    }
+
+    func testShortWindowIsLeftAlone() {
+        // Shortening it would leave less than the minimum height.
+        XCTAssertEqual(act(CGRect(x: 0, y: 820, width: 400, height: 162)), .leave)
+    }
+
+    func testResizingByHandIsLeftAloneButDoubleClickOnTitleBarIsNot() {
+        func drag(_ pointer: CGPoint) -> Bool {
+            DockClearance.isEdgeDrag([DockClearance.Sample(frame: fill, pointer: pointer, buttonDown: true)])
+        }
+        XCTAssertTrue(drag(CGPoint(x: 700, y: 980)), "bottom edge")
+        XCTAssertTrue(drag(CGPoint(x: 1510, y: 979)), "bottom right corner")
+        XCTAssertTrue(drag(CGPoint(x: 2, y: 500)), "left edge")
+        XCTAssertTrue(drag(CGPoint(x: 700, y: 35)), "top edge")
+        XCTAssertTrue(drag(CGPoint(x: 700, y: 985)), "just outside, where the resize cursor shows")
+        XCTAssertFalse(drag(CGPoint(x: 700, y: 46)), "the title bar")
+        XCTAssertFalse(drag(CGPoint(x: 700, y: 500)), "the middle")
+        XCTAssertFalse(drag(CGPoint(x: 700, y: 1000)), "away from the window")
+        XCTAssertFalse(DockClearance.isEdgeDrag([DockClearance.Sample(frame: fill, pointer: CGPoint(x: 700, y: 980), buttonDown: false)]))
+        XCTAssertEqual(act(fill, previous: CGRect(x: 100, y: 100, width: 800, height: 600), edgeDrag: true), .leave)
+        // Dragging a shortened window's bottom edge to the bottom of the screen (where the pointer stops)
+        // lands on the frame macOS gave it: still a resize by hand, not an un-zoom.
+        let set = CGRect(x: 0, y: 33, width: 1512, height: 872)
+        let record = DockClearance.Record(before: CGRect(x: 200, y: 200, width: 600, height: 400), full: fill, set: set)
+        XCTAssertEqual(act(fill, previous: set, record: record, edgeDrag: true), .leave)
+    }
+
+    func testTileMarginsAreKept() {
+        // "Tiled windows have margins": the same gap on every side, kept above the dock.
+        XCTAssertEqual(act(CGRect(x: 8, y: 41, width: 1496, height: 933)), .shrink(CGRect(x: 8, y: 41, width: 1496, height: 856)))
+        XCTAssertEqual(act(CGRect(x: 8, y: 41, width: 744, height: 933)), .shrink(CGRect(x: 8, y: 41, width: 744, height: 856)))
+        XCTAssertEqual(DockClearance.margin(CGRect(x: 8, y: 41, width: 744, height: 933), in: g), 8)
+        XCTAssertEqual(DockClearance.margin(fill, in: g), 0)
+        // A gap at the bottom that no other side shares isn't a tile.
+        XCTAssertEqual(act(CGRect(x: 300, y: 200, width: 600, height: 767)), .leave)
+    }
+
+    func testMovedWindowIsLeftAlone() {
+        let frame = CGRect(x: 200, y: 33, width: 800, height: 949)
+        XCTAssertEqual(act(frame, previous: CGRect(x: 0, y: 33, width: 800, height: 949)), .leave, "same size: moved, not resized")
+        XCTAssertEqual(act(frame, previous: CGRect(x: 200, y: 33, width: 800, height: 600)), .shrink(CGRect(x: 200, y: 33, width: 800, height: 872)))
+        // Moved here from another display of the same size (Window > Move to): looked at as it lands.
+        XCTAssertEqual(act(fill, previous: CGRect(x: 1512, y: 33, width: 1512, height: 949)), .shrink(CGRect(x: 0, y: 33, width: 1512, height: 872)))
+    }
+
+    func testZoomingAgainPutsTheWindowBack() {
+        let before = CGRect(x: 200, y: 200, width: 600, height: 400)
+        let set = CGRect(x: 0, y: 33, width: 1512, height: 872)
+        let record = DockClearance.Record(before: before, full: fill, set: set)
+        XCTAssertEqual(act(fill, previous: set, record: record), .restore(before))
+        // Where it was before isn't known (it was maximised before it was seen): shortened again.
+        XCTAssertEqual(act(fill, previous: set, record: DockClearance.Record(before: nil, full: fill, set: set)), .shrink(set))
+        // Filled from somewhere else: not an un-zoom.
+        XCTAssertEqual(act(fill, previous: CGRect(x: 0, y: 33, width: 700, height: 872), record: record), .shrink(set))
+        // Put back straight away (macOS keeps a tiled window's frame for a moment): shortened again.
+        XCTAssertEqual(DockClearance.action(DockClearance.Window(frame: fill), previous: set, record: record, edgeDrag: false,
+                                            putBack: true, in: g), .shrink(set))
+    }
+
+    func testRecordKeepsWhereTheWindowWasBefore() {
+        let before = CGRect(x: 200, y: 200, width: 600, height: 400)
+        let set = CGRect(x: 0, y: 33, width: 1512, height: 872)
+        XCTAssertEqual(DockClearance.record(full: fill, previous: before, old: nil, set: set),
+                       DockClearance.Record(before: before, full: fill, set: set))
+        XCTAssertEqual(DockClearance.record(full: fill, previous: fill, old: nil, set: set),
+                       DockClearance.Record(before: nil, full: fill, set: set), "no change seen: not known")
+        XCTAssertEqual(DockClearance.record(full: fill, previous: nil, old: nil, set: set),
+                       DockClearance.Record(before: nil, full: fill, set: set))
+        // Shortened again as the dock grew: still un-zooms to where it was, from the frame macOS gave it.
+        let old = DockClearance.Record(before: before, full: fill, set: set)
+        let lower = CGRect(x: 0, y: 33, width: 1512, height: 849)
+        XCTAssertEqual(DockClearance.record(full: set, previous: set, old: old, set: lower),
+                       DockClearance.Record(before: before, full: fill, set: lower))
+        // Given its full frame back straight away and shortened again: where it was before is kept.
+        XCTAssertEqual(DockClearance.record(full: fill, previous: set, old: old, set: set),
+                       DockClearance.Record(before: before, full: fill, set: set))
+    }
+}

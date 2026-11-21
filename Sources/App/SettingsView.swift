@@ -243,7 +243,7 @@ struct SettingsView: View {
     /// Shown only while Accessibility isn't allowed: what it adds, and where to allow it.
     private var accessibilityRow: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text("Menus show each app’s windows and its own items once OldMacDoc may use Accessibility.")
+            Text("Menus show each app’s windows and its own items, and maximised windows stop above the dock, once OldMacDoc may use Accessibility.")
                 .fixedSize(horizontal: false, vertical: true)
             Button("Allow in System Settings…", action: actions.openAccessibility).buttonStyle(.link)
         }
