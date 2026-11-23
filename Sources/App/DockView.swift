@@ -158,6 +158,17 @@ final class DockView: NSView, NSDraggingSource {
     private var nativeMenuOpen = false
     /// The windows listed in the open menu, to bring one forward.
     private var menuWindows: [AppWindows.Window] = []
+    /// Goes up with each menu opened, so a read of Apple's menu that lands late only changes the menu it was for.
+    private var menuGeneration = 0
+    /// The open app menu's state as read from the app (its windows, and whether it was slow to give them), so
+    /// it can be built again, without asking the app again, once Apple's menu has been read.
+    private var menuAppBase: (state: AppMenuState, slow: Bool, pid: pid_t?)?
+    /// Apple's menu as read for the open menu. It may say the app isn't responding, which isn't remembered.
+    private var menuAppleRead: AppleMenuSnapshot?
+    /// With VoiceOver (whose system menu can't change once open), an app's menu waiting for Apple's to say
+    /// whether the app has stopped responding: where it opens, whether a button may still be down, and the
+    /// app that was in front (if another comes in front meanwhile, it doesn't open).
+    private var pendingMenu: (anchor: CGRect, held: Bool, front: pid_t?)?
     let dockMenu = DockMenuController()
     let stacks = StackController()
     /// The folder whose stack is open (Fan or Grid; a List is a menu).
@@ -253,6 +264,13 @@ final class DockView: NSView, NSDraggingSource {
             self?.downloadFinished(path)
         })
         dockMenu.onClose = { [weak self] in self?.menuClosed() }
+        dockMenu.keyboardLent = { [weak self] in self?.appleMenus.hasKeyboard ?? false }
+        appleMenus.appsToRead = { [weak self] in
+            guard let self, self.settings.settings.appleMenuItems else { return [] }
+            return self.model.items.filter { !$0.isStack }.map { item in
+                (item, item.isRunning ? self.model.runningApplication(for: item)?.processIdentifier : nil)
+            }
+        }
         // A launch bounce ends when its app finishes launching, or quits (or crashes) before it does.
         let ws = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
@@ -1210,12 +1228,22 @@ final class DockView: NSView, NSDraggingSource {
         state["shown"] = isShown
         state["separatorX"] = separatorX as Any
         state["appleMenuOpens"] = appleMenus.opens
+        state["appleMenuResults"] = appleMenus.results
+        state["screenEvents"] = appleMenus.screenEvents
+        state["appleMenusRemembered"] = model.items.filter { item in
+            appleMenus.remembered(for: item, pid: item.isRunning ? model.runningApplication(for: item)?.processIdentifier : nil) != nil
+        }.map(\.id)
         state["tiles"] = displayOrder.compactMap { id -> [String: Any]? in
             guard let t = tiles[id] else { return nil }
             return ["id": id, "x": t.frame.midX, "running": t.item?.isRunning ?? false, "name": t.item?.name ?? "Trash",
                     "art": t.stackKey, "badge": t.badgeLabel as Any]
         }
         return state
+    }
+
+    /// Debug hook: read the apps' menus from Apple's Dock now, as is done while the screen can't be seen.
+    func debugReadAppleMenus() {
+        appleMenus.readWhileHidden(anyway: true)
     }
 
     /// Debug hook: click the tile with this id (a bundle id, or `::trash`), as a plain click would.
@@ -1234,7 +1262,7 @@ final class DockView: NSView, NSDraggingSource {
 
     override func mouseDown(with event: NSEvent) {
         let p = convert(event.locationInWindow, from: nil)
-        if dockMenu.isOpen || stacks.isOpen {
+        if dockMenu.isOpen || stacks.isOpen || pendingMenu != nil {
             // A click on the dock while a menu or stack is open closes it, and does nothing else, as with any menu.
             closeMenu()
             if event.modifierFlags.contains(.control) { showMenu(at: p, trigger: .controlClick) }
@@ -1638,29 +1666,86 @@ final class DockView: NSView, NSDraggingSource {
             anchor = t.frame
             subject = t.item.map { $0.isStack ? MenuSubject.stack($0.id) : .app($0) } ?? .trash
         }
-        guard let screen = window.screen ?? NSScreen.screens.first else { return }
+        guard (window.screen ?? NSScreen.screens.first) != nil else { return }
         closeMenu()
         holdWork?.cancel()
         pressedID = nil
         menuSubject = subject
+        menuGeneration += 1
+        menuAppBase = nil
+        menuAppleRead = nil
         let items = menuItems(for: subject)
         guard !items.isEmpty else { return }
         menuTileID = id == Self.separatorID ? nil : id
         menuOpen = true
         updateLabel()
         layoutTiles()
+        var held = trigger != .keyboard
+        #if DEBUG
+        if debugMenuPressed { held = true }
+        #endif
+        guard case .app(let item) = subject, let base = menuAppBase, let fresh = appleReadNeeded(item, base: base) else {
+            presentMenu(items, anchor: anchor, held: held)
+            return
+        }
+        // Apple's menu is asked off the main thread, so the dock keeps drawing meanwhile. The menu opens at once
+        // and shows Application Not Responding in place if Apple's Dock says so (with VoiceOver it waits).
+        if NSWorkspace.shared.isVoiceOverEnabled {
+            pendingMenu = (anchor, held, NSWorkspace.shared.frontmostApplication?.processIdentifier)
+        } else {
+            presentMenu(items, anchor: anchor, held: held)
+        }
+        let generation = menuGeneration
+        appleMenus.read(item, pid: base.pid, windowTitles: Set(base.state.windows.map(\.title)), fresh: fresh) { [weak self] snapshot in
+            self?.appleMenuRead(snapshot, generation: generation)
+        }
+    }
+
+    /// Shows `items` above `anchor`. `held`: it may have been opened under a mouse button that's still down.
+    private func presentMenu(_ items: [DockMenuItem], anchor: CGRect, held: Bool) {
+        guard let window, let screen = window.screen ?? NSScreen.screens.first else {
+            menuClosed()
+            return
+        }
         if NSWorkspace.shared.isVoiceOverEnabled {
             showNativeMenu(items, anchor: anchor)
             return
         }
         let top = window.convertPoint(toScreen: convert(NSPoint(x: anchor.midX, y: anchor.maxY), to: nil))
-        var tracking = trigger != .keyboard && NSEvent.pressedMouseButtons != 0
+        var tracking = held && NSEvent.pressedMouseButtons != 0
         #if DEBUG
-        if debugMenuPressed { tracking = true }
+        if held, debugMenuPressed { tracking = true }
         #endif
         dockMenu.open(items, anchorX: top.x, anchorTop: top.y, screen: screen,
-                  style: MenuStyle.forShelf(settings.settings.shelfStyle), tracking: tracking)
+                      style: MenuStyle.forShelf(settings.settings.shelfStyle), tracking: tracking)
         onPointerActivity?()
+    }
+
+    /// Opens the app menu that was waiting for Apple's to be read, with whatever has been read by now.
+    private func presentPendingMenu() {
+        guard let pending = pendingMenu else { return }
+        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pending.front else {
+            closeMenu()
+            return
+        }
+        pendingMenu = nil
+        guard case .app(let item)? = menuSubject, let base = menuAppBase else {
+            menuClosed()
+            return
+        }
+        presentMenu(appMenuItems(item, base: base), anchor: pending.anchor, held: pending.held)
+    }
+
+    /// Apple's menu has been read for the menu opened as `generation`: it opens if it was waiting, or
+    /// shows what's new in place.
+    private func appleMenuRead(_ snapshot: AppleMenuSnapshot?, generation: Int) {
+        guard generation == menuGeneration, menuOpen, case .app(let item)? = menuSubject, let base = menuAppBase else { return }
+        if let snapshot { menuAppleRead = snapshot }
+        if pendingMenu != nil {
+            presentPendingMenu()
+        } else if dockMenu.isOpen {
+            dockMenu.replaceItems(appMenuItems(item, base: base))
+        }
     }
 
     /// With VoiceOver, the same menu as a system menu, which VoiceOver reads and drives.
@@ -1684,6 +1769,10 @@ final class DockView: NSView, NSDraggingSource {
 
     /// Closes the menu, if one is open. The window controller calls this when the dock steps aside or hides.
     func closeMenu() {
+        if pendingMenu != nil {
+            pendingMenu = nil
+            menuClosed()
+        }
         if dockMenu.isOpen { dockMenu.close() }
         if stacks.isOpen { stacks.close() }
     }
@@ -1700,7 +1789,10 @@ final class DockView: NSView, NSDraggingSource {
 
     private func menuItems(for subject: MenuSubject) -> [DockMenuItem] {
         switch subject {
-        case .app(let item): return appMenuItems(item)
+        case .app(let item):
+            let base = appMenuBase(item)
+            menuAppBase = base
+            return appMenuItems(item, base: base)
         case .trash: return DockMenuBuilder.trash(isFull: trash.isFull, strings: strings)
         case .separator:
             return DockMenuBuilder.separator(autoHide: settings.settings.autoHide, magnification: settings.settings.magnification,
@@ -1709,9 +1801,9 @@ final class DockView: NSView, NSDraggingSource {
         }
     }
 
-    /// An app's menu: its windows (read from the app now), its own items, recent documents, Open at Login
-    /// and Assign To (from Apple's Dock, remembered per app), and the rest, which OldMacDoc does itself.
-    private func appMenuItems(_ item: DockModel.Item) -> [DockMenuItem] {
+    /// What an app's menu shows from the app itself, read as it opens: its windows, and whether it was slow to
+    /// give them (then only Apple's Dock can say whether it has stopped responding).
+    private func appMenuBase(_ item: DockModel.Item) -> (state: AppMenuState, slow: Bool, pid: pid_t?) {
         let app = item.isRunning ? model.runningApplication(for: item) : nil
         var state = AppMenuState()
         state.isRunning = app != nil
@@ -1733,15 +1825,27 @@ final class DockView: NSView, NSDraggingSource {
                 slow = true
             }
         }
-        // The app's own items and recent files come from Apple's menu, read once per app (each read flickers at the
-        // screen's edge), unless that's switched off. A slow app's is read afresh: only Apple's Dock says it's hung.
-        let pid = app?.processIdentifier
+        return (state, slow, app?.processIdentifier)
+    }
+
+    /// Whether an app's menu needs Apple's read for it as it opens (and afresh), or nil when what's remembered will
+    /// do. Each read puts Apple's menu on screen for a moment, at the middle of the edge Apple's Dock is parked
+    /// on, so the app's own items and recent files are only ever read while the screen can't be seen
+    /// (`AppleDockMenus.readWhileHidden`). Only a slow app's is read now: only Apple's Dock can say it has
+    /// stopped responding.
+    private func appleReadNeeded(_ item: DockModel.Item, base: (state: AppMenuState, slow: Bool, pid: pid_t?)) -> Bool? {
+        base.slow ? true : nil
+    }
+
+    /// An app's menu: its windows (read from the app as it opened), its own items, recent documents, Open at Login
+    /// and Assign To (from Apple's Dock: as read for this menu, else as remembered), and the rest, which
+    /// OldMacDoc does itself.
+    private func appMenuItems(_ item: DockModel.Item, base: (state: AppMenuState, slow: Bool, pid: pid_t?)) -> [DockMenuItem] {
+        var state = base.state
         let fromApple = settings.settings.appleMenuItems
-        let snapshot = fromApple || slow
-            ? appleMenus.snapshot(for: item, pid: pid, windowTitles: Set(state.windows.map(\.title)), fresh: slow)
-            : appleMenus.remembered(for: item, pid: pid)
+        let snapshot = menuAppleRead ?? appleMenus.remembered(for: item, pid: base.pid)
         if let snapshot {
-            state.notResponding = slow && snapshot.notResponding
+            state.notResponding = base.slow && snapshot.notResponding
             if fromApple { state.appleGroups = snapshot.groups }
             state.openAtLogin = snapshot.openAtLogin
         }
@@ -1758,7 +1862,7 @@ final class DockView: NSView, NSDraggingSource {
             }
         }
         // As Apple's: only for an app with windows (those on other desktops, Apple's menu knows about).
-        state.canShowAllWindows = app != nil && hasTile && (!state.windows.isEmpty || snapshot?.canShowAllWindows == true)
+        state.canShowAllWindows = base.pid != nil && hasTile && (!state.windows.isEmpty || snapshot?.canShowAllWindows == true)
         return DockMenuBuilder.app(state, strings: strings)
     }
 
@@ -1804,7 +1908,7 @@ final class DockView: NSView, NSDraggingSource {
             if let app, i < menuWindows.count { AppWindows.focus(menuWindows[i].element, of: app) }
         case .apple(let path):
             let titles = Set(menuWindows.map(\.info.title))
-            if !appleMenus.press(path, for: item, pid: app?.processIdentifier, windowTitles: titles) { NSSound.beep() }
+            appleMenus.press(path, for: item, pid: app?.processIdentifier, windowTitles: titles) { if !$0 { NSSound.beep() } }
         case .iconMode(let mode): updateOverride(item) { $0.mode = mode }
         case .chooseIconImage: chooseImage(for: item)
         case .resetIcon: resetIcon(for: item)

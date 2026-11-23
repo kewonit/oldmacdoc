@@ -16,6 +16,22 @@ struct AppleMenuNode: Equatable {
 
 /// What OldMacDoc takes from Apple's menu for an app. Everything OldMacDoc can do itself (Keep in
 /// Dock, Show in Finder, Hide, Quit) is left out: Keep in Dock in particular is about Apple's own pins.
+/// When a remembered copy of an app's menu in Apple's Dock is worth reading again. Each read flickers at
+/// the screen's edge, so it's read again only once it may have changed: the app has been used since
+/// (recent files, items that depend on what it's doing), or it's been a while (Music's controls).
+enum AppleMenuFreshness {
+    static let maxAge: TimeInterval = 600
+
+    /// - Parameters:
+    ///   - readAt: when it was read (seconds since the reference date), or nil if it never was. If the clock has
+    ///     since been set back before it, it's read again.
+    ///   - usedSince: the app has been in front, and left, since it was read.
+    static func needsRead(readAt: TimeInterval?, usedSince: Bool, now: TimeInterval) -> Bool {
+        guard let readAt, now >= readAt else { return true }
+        return usedSince || now - readAt >= maxAge
+    }
+}
+
 struct AppleMenuSnapshot: Equatable {
     var notResponding = false
     /// The app's own items, then its recent documents or folders, as groups of rows that replay Apple's.

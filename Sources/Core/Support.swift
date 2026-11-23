@@ -103,8 +103,8 @@ struct AppSettings: Codable, Equatable {
     /// Left keeps Apple's Dock on the right edge, as it always was.
     var addDesktopSide: AddDesktopSide = .left
     var overrides: [String: IconOverride] = [:]
-    /// Each app's own menu items and recent files, copied from Apple's Dock (which makes its menu flicker
-    /// at the screen's edge once per app). Off, Apple's Dock menus are only opened to carry out a choice.
+    /// Each app's own menu items and recent files, copied from Apple's Dock while the screen can't be seen
+    /// (reading them puts Apple's menu on screen). Off, Apple's Dock menus are only opened to carry out a choice.
     var appleMenuItems = true
 
     /// The sizes the menu offers, in points.

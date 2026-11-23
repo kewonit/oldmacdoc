@@ -229,11 +229,11 @@ struct SettingsView: View {
         }
     }
 
-    /// Copying each app's own items from Apple's Dock flickers its menu at the screen's edge once per app.
+    /// Each app's own items are copied from Apple's Dock while the screen can't be seen (asleep or locked).
     private var appleItemsToggle: some View {
         VStack(alignment: .leading, spacing: 3) {
-            switchRow("Items from Apple’s Dock", isOn: $store.settings.appleMenuItems)
-            Text("Each app’s own menu items, like New Window, and its recent files. Reading them makes Apple’s hidden Dock flicker at the edge of the screen once per app.")
+            switchRow("App items in menus", isOn: $store.settings.appleMenuItems)
+            Text("Like New Window and recent files. Updated while your screen is off.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

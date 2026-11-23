@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.2.5
+
+- **No more flicker when you right-click.** Opening an app's menu no longer makes Apple's hidden Dock flash its own menu at the edge of the screen.
+- **App items in menus, updated while your screen is off.** An app's own items, like New Window, and its recent files are copied while your display is asleep or your Mac is locked, and kept when the app quits. Right after you update, they appear once your screen has been off.
+- **A clearer switch.** Items from Apple's Dock is now called App items in menus.
+- **A slow app no longer freezes the dock.** The menu opens at once, and Application Not Responding appears in it if the app has stopped responding.
+
+Also in this update, from 1.2.3 and 1.2.4:
+
+- **Maximised windows stop above the dock.** With Hide automatically off, zoomed, filled and tiled windows end above the dock instead of running under it.
+- Fixes from a full review: busy apps, login items on disconnected disks, two copies of an app, and folder stacks.
+
 ## 1.2.4
 
 - **Maximised windows stop above the dock.** With Hide automatically off, a window you zoomed, filled (Window > Fill, or a double-click on its title bar) or tiled to a side or a bottom corner ran under the dock: Apple's parked Dock leaves macOS thinking the bottom of the screen is free. Now the window steps up to end above the dock, as it would with Apple's Dock, and windows that were already maximised step up when you turn hiding off. Zoom it again and it goes back where it was. It needs Accessibility, the permission the menus already use.

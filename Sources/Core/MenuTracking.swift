@@ -20,6 +20,15 @@ enum MenuTracking {
         return .close
     }
 
+    /// How long after a menu's rows change (Apple's menu read after it opened) a choice in it is ignored: the
+    /// click was aimed at the rows that were there before.
+    static let settleAfterChange: TimeInterval = 0.3
+
+    static func acceptsChoice(rowsChangedAt: TimeInterval?, now: TimeInterval) -> Bool {
+        guard let rowsChangedAt else { return true }
+        return now - rowsChangedAt >= settleAfterChange
+    }
+
     /// The next row that can be chosen, going `step` (+1 down, -1 up) from `current`, wrapping around.
     static func next(from current: Int?, step: Int, selectable: [Bool]) -> Int? {
         let n = selectable.count

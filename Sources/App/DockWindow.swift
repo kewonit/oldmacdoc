@@ -526,6 +526,7 @@ final class DockWindowController {
             case "add-desktop": AddDesktopSide(rawValue: arg).map { self.settings.settings.addDesktopSide = $0 }
             case "size": Double(arg).map { self.settings.settings.iconSize = $0 }
             case "apple-items": self.settings.settings.appleMenuItems = arg != "off"
+            case "apple-read": self.view.debugReadAppleMenus()
             case "autohide": self.settings.settings.autoHide = arg != "off"
             case "stats":
                 // Appends a line to oldmacdoc-stats.txt in the user's temporary folder.

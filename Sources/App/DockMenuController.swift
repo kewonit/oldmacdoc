@@ -11,6 +11,9 @@ final class DockMenuController {
     var loadFolder: ((String) -> [DockMenuItem])?
     /// Clicks in this window (the dock) are left to it: it closes or reopens the menu itself.
     weak var passThroughWindow: NSWindow?
+    /// While this is true, losing the keyboard doesn't close the menu: Apple's Dock menu is being read and has
+    /// it for a moment. The menu takes it back once that's over. (Switching apps still closes it.)
+    var keyboardLent: (() -> Bool)?
 
     private(set) var isOpen = false
     /// Following a mouse button held since the menu opened (press, drag, release).
@@ -28,6 +31,8 @@ final class DockMenuController {
     private var typed = ""
     private var typedAt: TimeInterval = 0
     private var pendingSubmenu: DispatchWorkItem?
+    /// When the open menu's rows last changed under the pointer (system uptime), or nil.
+    private var rowsChangedAt: TimeInterval?
     private var monitors: [Any] = []
     private var observers: [(NotificationCenter, NSObjectProtocol)] = []
 
@@ -76,6 +81,7 @@ final class DockMenuController {
         isTracking = tracking
         isOpen = true
         typed = ""
+        rowsChangedAt = nil
         let level = Level(items: items, style: style, root: true)
         wire(level)
         levels = [level]
@@ -86,6 +92,38 @@ final class DockMenuController {
     }
 
     func close() { close(notify: true) }
+
+    /// Shows `items` in the open menu instead of what it had (Apple's menu, read after it opened, had
+    /// something new). An open submenu stays if its row is still there; the highlight stays on the row under
+    /// the pointer, or on the same row if the keyboard put it there. For a moment, a choice is ignored: it was
+    /// aimed at the rows that were there before.
+    func replaceItems(_ items: [DockMenuItem]) {
+        guard isOpen, let root = levels.first, root.items != items, !items.isEmpty else { return }
+        let oldRows = root.rowsView.rows
+        let highlightedRow = root.rowsView.highlighted.map { oldRows[$0] }
+        let subHighlights = levels.dropFirst().map(\.rowsView.highlighted)
+        root.items = items
+        layout(0)
+        let newRows = root.rowsView.rows
+        if levels.count > 1, let parent = levels[1].parentRow, parent < oldRows.count,
+           let moved = newRows.firstIndex(of: oldRows[parent]) {
+            levels[1].parentRow = moved
+            for k in 1..<levels.count {
+                layout(k)
+                levels[k].rowsView.highlighted = subHighlights[k - 1]
+            }
+            root.rowsView.highlighted = moved
+        } else {
+            pendingSubmenu?.cancel()
+            closeLevels(after: 0)
+            if let (k, row) = hit(NSEvent.mouseLocation), k == 0 {
+                root.rowsView.highlighted = row.flatMap { newRows[$0].isSelectable ? $0 : nil }
+            } else {
+                root.rowsView.highlighted = highlightedRow.flatMap { newRows.firstIndex(of: $0) }
+            }
+        }
+        rowsChangedAt = ProcessInfo.processInfo.systemUptime
+    }
 
     #if DEBUG
     private(set) var lastCloseReason = ""
@@ -118,8 +156,20 @@ final class DockMenuController {
         if level.panel.takesKeyboard {
             level.panel.onResignKey = { [weak self] in
                 // Another window took the keyboard (a click in another app, the settings panel).
-                DispatchQueue.main.async { self?.close(notify: true, reason: "resignKey") }
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    if self.keyboardLent?() == true { self.takeKeyboardBack() } else { self.close(notify: true, reason: "resignKey") }
+                }
             }
+        }
+    }
+
+    /// Makes the menu key again once Apple's menu has let go of the keyboard.
+    private func takeKeyboardBack() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self, self.isOpen, let root = self.levels.first else { return }
+            if self.keyboardLent?() == true { self.takeKeyboardBack(); return }
+            if !root.panel.isKeyWindow { root.panel.makeKey() }
         }
     }
 
@@ -288,7 +338,8 @@ final class DockMenuController {
 
     private func choose(_ k: Int, _ row: Int) {
         let item = levels[k].rowsView.rows[row]
-        guard item.isSelectable, item.submenu == nil, item.folderPath == nil else { return }
+        guard item.isSelectable, item.submenu == nil, item.folderPath == nil,
+              MenuTracking.acceptsChoice(rowsChangedAt: rowsChangedAt, now: ProcessInfo.processInfo.systemUptime) else { return }
         let command = item.command
         close()
         // After the menu has gone, so dialogs it starts (Empty Trash, Choose Image) come up on their own.

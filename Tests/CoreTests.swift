@@ -1121,6 +1121,21 @@ final class LiveMenuStateTests: XCTestCase {
         XCTAssertFalse(LoginItemMatch.matches(items, appURL: URL(fileURLWithPath: "/Applications/Safari.app"), bundleID: "com.apple.Safari",
                                               bundleIDOf: { _ in nil }))
     }
+
+    func testAppleMenuIsReadAgainOnlyOnceItMayHaveChanged() {
+        XCTAssertTrue(AppleMenuFreshness.needsRead(readAt: nil, usedSince: false, now: 100))
+        XCTAssertFalse(AppleMenuFreshness.needsRead(readAt: 100, usedSince: false, now: 160))
+        XCTAssertTrue(AppleMenuFreshness.needsRead(readAt: 100, usedSince: true, now: 101))
+        XCTAssertTrue(AppleMenuFreshness.needsRead(readAt: 100, usedSince: false, now: 100 + AppleMenuFreshness.maxAge))
+        // The clock was set back.
+        XCTAssertTrue(AppleMenuFreshness.needsRead(readAt: 100, usedSince: false, now: 50))
+    }
+
+    func testChoiceRightAfterTheRowsChangeIsIgnored() {
+        XCTAssertTrue(MenuTracking.acceptsChoice(rowsChangedAt: nil, now: 5))
+        XCTAssertFalse(MenuTracking.acceptsChoice(rowsChangedAt: 5, now: 5.1))
+        XCTAssertTrue(MenuTracking.acceptsChoice(rowsChangedAt: 5, now: 5.5))
+    }
 }
 
 final class DockClearanceTests: XCTestCase {
